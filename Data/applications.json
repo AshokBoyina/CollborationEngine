@@ -1,0 +1,15 @@
+[
+  {
+    "Id": 1,
+    "Name": "DemoApp",
+    "Description": "Local demo application",
+    "ApiKey": "5u2qBVKhXLmZ58hIu4dCfsO2jRgWW8NW",
+    "IsActive": true,
+    "CreatedAt": "2026-04-06T01:23:59.5966503Z",
+    "UpdatedAt": "2026-04-06T01:23:59.5934019Z",
+    "Users": [],
+    "Agents": [],
+    "Supervisors": [],
+    "CollaborationSessions": []
+  }
+]

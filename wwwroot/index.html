@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collaboration Engine</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.0/signalr.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .chat-container {
+            height: calc(100vh - 200px);
+        }
+        .messages-container {
+            height: calc(100% - 120px);
+            overflow-y: auto;
+        }
+        .video-container {
+            background: #000;
+            border-radius: 8px;
+        }
+        .typing-indicator {
+            display: none;
+        }
+        .typing-indicator.active {
+            display: block;
+        }
+
+        .typing-dots {
+            display: inline-block;
+            width: 20px;
+            text-align: left;
+            margin-left: 6px;
+        }
+        .typing-dots span {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            margin-right: 2px;
+            border-radius: 50%;
+            background: #9ca3af;
+            animation: typingDot 1.2s infinite ease-in-out;
+        }
+        .typing-dots span:nth-child(2) { animation-delay: .15s; }
+        .typing-dots span:nth-child(3) { animation-delay: .3s; }
+        @keyframes typingDot {
+            0%, 80%, 100% { transform: translateY(0); opacity: .35; }
+            40% { transform: translateY(-3px); opacity: 1; }
+        }
+
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+        #app { max-width: 1100px; }
+        input[type="text"], input[type="email"], button { font-size: 14px; }
+        input[type="text"], input[type="email"] { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; }
+        button { padding: 8px 12px; border-radius: 6px; border: 0; }
+        button:disabled { opacity: .55; cursor: not-allowed; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="app" class="container mx-auto p-4">
+        <!-- Login Section -->
+        <div id="loginSection" class="max-w-md mx-auto bg-white rounded-lg shadow-md p-6">
+            <h1 class="text-2xl font-bold text-center mb-6">Collaboration Engine</h1>
+            
+            <div id="userTypeTabs" class="flex mb-6 border-b">
+                <button onclick="switchUserType('user')" class="user-tab flex-1 py-2 px-4 text-center border-b-2 border-blue-500 text-blue-600" data-type="user">User</button>
+                <button onclick="switchUserType('agent')" class="user-tab flex-1 py-2 px-4 text-center border-b-2 border-transparent text-gray-600" data-type="agent">Agent</button>
+                <button onclick="switchUserType('supervisor')" class="user-tab flex-1 py-2 px-4 text-center border-b-2 border-transparent text-gray-600" data-type="supervisor">Supervisor</button>
+            </div>
+
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="mb-4" id="userNameField" style="display:block;">
+                    <label class="block text-gray-700 text-sm font-bold mb-2" for="name">
+                        Name
+                    </label>
+                    <input type="text" id="name" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-gray-700 text-sm font-bold mb-2" for="email">
+                        Email
+                    </label>
+                    <input type="email" id="email" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+
+                <div class="mb-6" id="userPhoneField" style="display:block;">
+                    <label class="block text-gray-700 text-sm font-bold mb-2" for="phoneNumber">
+                        Phone Number
+                    </label>
+                    <input type="text" id="phoneNumber" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <button type="submit" 
+                        class="w-full bg-blue-500 text-white font-bold py-2 px-4 rounded-md hover:bg-blue-600 transition">
+                    Login
+                </button>
+            </form>
+        </div>
+
+        <!-- Collaboration Section -->
+        <div id="collaborationSection" class="hidden">
+            <!-- Header -->
+            <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h2 class="text-xl font-bold">Collaboration Session</h2>
+                        <p class="text-sm text-gray-600" id="collaborationIdRow">ID: <span id="collaborationId"></span></p>
+                        <p class="text-sm text-gray-600">Role: <span id="userRole"></span></p>
+                        <p class="text-sm text-gray-600" id="userIdentityRow">You: <span id="userIdentity"></span></p>
+                    </div>
+                    <div class="flex space-x-2">
+                        <button id="newSessionBtn" onclick="createNewSession()" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                            <i class="fas fa-plus mr-2"></i>New Session
+                        </button>
+                        <button id="endSessionBtn" onclick="endSession()" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">
+                            <i class="fas fa-stop mr-2"></i>End Session
+                        </button>
+                        <button id="logoutBtn" onclick="logout()" class="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">
+                            <i class="fas fa-sign-out-alt mr-2"></i>Logout
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <!-- Chat Section -->
+                <div class="lg:col-span-2">
+                    <div class="bg-white rounded-lg shadow-md p-4 chat-container">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-semibold">Chat <span id="chatTitleSuffix" class="text-sm font-normal text-gray-500"></span></h3>
+                            <div id="connectionStatus" class="text-sm">
+                                <span class="text-gray-500">Disconnected</span>
+                            </div>
+                        </div>
+
+                        <!-- Messages Container -->
+                        <div id="messagesContainer" class="messages-container bg-gray-50 rounded p-4 mb-4">
+                            <!-- Messages will be added here -->
+                        </div>
+
+                        <!-- Typing Indicator -->
+                        <div id="typingIndicator" class="typing-indicator text-sm text-gray-500 mb-2">
+                            <span id="typingText">Someone is typing</span>
+                            <span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+                        </div>
+
+                        <!-- Message Input -->
+                        <div class="flex">
+                            <input type="text" id="messageInput" placeholder="Type a message..." 
+                                   class="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                   onkeypress="handleMessageKeyPress(event)" disabled>
+                            <button id="sendMessageBtn" onclick="sendMessage()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600" disabled>
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="flex space-x-2 mt-4">
+                            <button id="requestAgentBtn" onclick="requestAgent()" class="bg-orange-500 text-white px-3 py-1 rounded text-sm hover:bg-orange-600">
+                                <i class="fas fa-user-headset mr-1"></i>Request Human
+                            </button>
+                            <button onclick="requestSupervisor()" class="bg-purple-500 text-white px-3 py-1 rounded text-sm hover:bg-purple-600" id="supervisorBtn" style="display:none;">
+                                <i class="fas fa-user-tie mr-1"></i>Add Supervisor
+                            </button>
+                            <button id="shareScreenBtn" onclick="startScreenShare()" class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600">
+                                <i class="fas fa-desktop mr-1"></i>Share Screen
+                            </button>
+                            <button id="stopShareBtn" onclick="stopScreenShare()" class="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600">
+                                <i class="fas fa-stop mr-1"></i>Stop Share
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Video/Recording Section -->
+                <div class="lg:col-span-1">
+                    <!-- Active Sessions (Supervisor Only) -->
+                    <div class="bg-white rounded-lg shadow-md p-4 mb-4" id="activeSessionsSection" style="display:none;">
+                        <h3 class="text-lg font-semibold mb-4">Active Sessions</h3>
+                        <div id="activeSessionsList" class="space-y-2">
+                            <!-- Active sessions will be populated here -->
+                        </div>
+                        <button onclick="loadActiveSessions()" class="mt-3 w-full bg-blue-500 text-white px-3 py-2 rounded text-sm hover:bg-blue-600">
+                            Refresh
+                        </button>
+                    </div>
+
+                    <div class="bg-white rounded-lg shadow-md p-4" id="videoSection" style="display:none;">
+                        <h3 class="text-lg font-semibold mb-4">Live Stream</h3>
+                        
+                        <!-- Video Player -->
+                        <div class="video-container mb-4">
+                            <!-- Local video preview for screen sharer -->
+                            <video id="localVideo" class="w-full rounded mb-2" style="display:none;" autoplay muted></video>
+                            
+                            <!-- Remote video for viewers -->
+                            <video id="videoPlayer" class="w-full rounded" autoplay playsinline muted style="display:none;"></video>
+                            <div id="videoPlaceholder" class="w-full h-48 flex items-center justify-center text-gray-400">
+                                <i class="fas fa-video text-4xl"></i>
+                            </div>
+                        </div>
+
+                        <!-- Recording Controls -->
+                        <div class="space-y-2" id="recordingControls">
+                            <button onclick="startRecording()" class="w-full bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">
+                                <i class="fas fa-record-vinyl mr-2"></i>Start Recording
+                            </button>
+                            <button onclick="stopRecording()" class="w-full bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">
+                                <i class="fas fa-stop-circle mr-2"></i>Stop Recording
+                            </button>
+                        </div>
+
+                        <!-- Video Gallery for Supervisors -->
+                        <div id="videoGallery" class="mt-4" style="display:none;">
+                            <div class="flex justify-between items-center mb-2">
+                                <h4 class="font-semibold">Saved Recordings</h4>
+                                <button onclick="loadSavedRecordings()" class="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600">
+                                    <i class="fas fa-sync-alt mr-1"></i>Refresh
+                                </button>
+                            </div>
+                            <div id="recordingsList" class="space-y-2 max-h-64 overflow-y-auto">
+                                <!-- Recordings will be listed here -->
+                            </div>
+                        </div>
+
+                        <!-- Session Info -->
+                        <div class="mt-4 p-3 bg-gray-50 rounded">
+                            <h4 class="font-semibold mb-2">Session Info</h4>
+                            <div id="sessionInfo" class="text-sm text-gray-600">
+                                <!-- Session details will be shown here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Available Agents/Supervisors -->
+                    <div class="bg-white rounded-lg shadow-md p-4 mt-4" id="availablePeopleSection">
+                        <h3 class="text-lg font-semibold mb-4">Available Staff</h3>
+                        <div id="availableAgents" class="mb-4">
+                            <h4 class="font-medium mb-2">Agents</h4>
+                            <div id="agentsList" class="space-y-2">
+                                <!-- Agents list will be populated here -->
+                            </div>
+                        </div>
+                        <div id="availableSupervisors">
+                            <h4 class="font-medium mb-2">Supervisors</h4>
+                            <div id="supervisorsList" class="space-y-2">
+                                <!-- Supervisors list will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let connection = null;
+        let connectionStartPromise = null;
+        let currentUser = null;
+        let currentSession = null;
+        let peerConnection = null;
+        let localStream = null;
+        let currentStream = null;
+
+        // Configuration
+        const API_BASE_URL = window.location.origin + '/api';
+        const HUB_URL = window.location.origin + '/collaborationHub';
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            checkExistingSession();
+            switchUserType('user');
+        });
+
+        // User type switching
+        function switchUserType(type) {
+            document.querySelectorAll('.user-tab').forEach(tab => {
+                if (tab.dataset.type === type) {
+                    tab.classList.add('border-blue-500', 'text-blue-600');
+                    tab.classList.remove('border-transparent', 'text-gray-600');
+                } else {
+                    tab.classList.remove('border-blue-500', 'text-blue-600');
+                    tab.classList.add('border-transparent', 'text-gray-600');
+                }
+            });
+
+            const showUserFields = type === 'user';
+            document.getElementById('userNameField').style.display = showUserFields ? 'block' : 'none';
+            document.getElementById('userPhoneField').style.display = showUserFields ? 'block' : 'none';
+            document.getElementById('name').required = showUserFields;
+            document.getElementById('phoneNumber').required = showUserFields;
+        }
+
+        // Login handling
+        async function handleLogin(event) {
+            event.preventDefault();
+            
+            const userType = document.querySelector('.user-tab.border-blue-500').dataset.type;
+
+            const email = document.getElementById('email').value;
+            const name = document.getElementById('name') ? document.getElementById('name').value : '';
+            const phoneNumber = document.getElementById('phoneNumber') ? document.getElementById('phoneNumber').value : '';
+
+            try {
+                if (userType === 'user') {
+                    const regResponse = await fetch(`${API_BASE_URL}/management/user/register/simple`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ name, email, phoneNumber })
+                    });
+
+                    if (!regResponse.ok) {
+                        const error = await regResponse.text();
+                        alert('Registration failed: ' + error);
+                        return;
+                    }
+
+                    const user = await regResponse.json();
+                    currentUser = {
+                        userType: 'user',
+                        id: user.Id,
+                        name: user.Name,
+                        email: user.Email,
+                        phoneNumber: user.PhoneNumber,
+                        token: ''
+                    };
+
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    showCollaborationSection();
+                    await createNewSession();
+                    return;
+                }
+
+                const response = await fetch(`${API_BASE_URL}/auth/login/${userType}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, apiKey: '' })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const resolvedUserType = (data.UserType || userType || 'user').toString().toLowerCase();
+                    const principal = data.Agent || data.Supervisor || data.User || null;
+                    currentUser = {
+                        ...data,
+                        userType: resolvedUserType,
+                        id: principal?.Id || 1,
+                        name: principal?.Name || principal?.name || data?.Name || data?.name || '',
+                        email: principal?.Email || principal?.email || data?.Email || data?.email || email || '',
+                        token: data.Token || data.token || ''
+                    };
+
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    showCollaborationSection();
+                } else {
+                    const error = await response.text();
+                    alert('Login failed: ' + error);
+                }
+            } catch (error) {
+                alert('Login error: ' + error.message);
+            }
+        }
+
+        // Check existing session
+        function checkExistingSession() {
+            const savedUser = localStorage.getItem('currentUser');
+            if (savedUser) {
+                currentUser = JSON.parse(savedUser);
+
+                const savedSession = localStorage.getItem('currentSession');
+                if (savedSession) {
+                    try {
+                        currentSession = JSON.parse(savedSession);
+                    } catch {
+                        currentSession = null;
+                    }
+                }
+                showCollaborationSection();
+            }
+        }
+
+        // Show collaboration section
+        function showCollaborationSection() {
+            document.getElementById('loginSection').classList.add('hidden');
+            document.getElementById('collaborationSection').classList.remove('hidden');
+            document.getElementById('userRole').textContent = currentUser.userType.charAt(0).toUpperCase() + currentUser.userType.slice(1);
+
+            const chatTitleSuffix = document.getElementById('chatTitleSuffix');
+            if (chatTitleSuffix) {
+                chatTitleSuffix.textContent = currentUser?.userType === 'agent'
+                    ? `(${(currentUser?.name || currentUser?.email || '').trim()})`
+                    : '';
+            }
+
+            const identity = `${currentUser?.name || currentUser?.email || ''} (${currentUser?.id || ''})`;
+            const userIdentity = document.getElementById('userIdentity');
+            if (userIdentity) {
+                userIdentity.textContent = identity.trim();
+            }
+
+            setChatEnabled(!!(currentSession && currentSession.CollaborationId));
+
+            const isUser = currentUser.userType === 'user';
+            const isAgent = currentUser.userType === 'agent';
+            const isSupervisor = currentUser.userType === 'supervisor';
+            const collaborationIdRow = document.getElementById('collaborationIdRow');
+            const newSessionBtn = document.getElementById('newSessionBtn');
+            const endSessionBtn = document.getElementById('endSessionBtn');
+            const logoutBtn = document.getElementById('logoutBtn');
+            const stopShareBtn = document.getElementById('stopShareBtn');
+            const requestAgentBtn = document.getElementById('requestAgentBtn');
+            const shareScreenBtn = document.getElementById('shareScreenBtn');
+            const activeSessionsSection = document.getElementById('activeSessionsSection');
+
+            if (collaborationIdRow) collaborationIdRow.style.display = 'block';
+            if (newSessionBtn) newSessionBtn.style.display = isUser ? 'none' : 'inline-flex';
+            if (endSessionBtn) endSessionBtn.style.display = isUser ? 'none' : 'inline-flex';
+            if (logoutBtn) logoutBtn.style.display = isUser ? 'none' : 'inline-flex';
+            if (stopShareBtn) stopShareBtn.style.display = isUser ? 'inline-flex' : 'none';
+            if (requestAgentBtn) requestAgentBtn.style.display = isUser ? 'inline-flex' : 'none';
+            if (shareScreenBtn) shareScreenBtn.style.display = isUser ? 'inline-flex' : 'none';
+            if (activeSessionsSection) activeSessionsSection.style.display = isSupervisor ? 'block' : 'none';
+
+            const availablePeopleSection = document.getElementById('availablePeopleSection');
+            if (availablePeopleSection) {
+                availablePeopleSection.style.display = isAgent ? 'block' : 'none';
+            }
+
+            // Show video section only for agents and supervisors
+            const videoSection = document.getElementById('videoSection');
+            if (currentUser.userType === 'agent' || currentUser.userType === 'supervisor') {
+                videoSection.style.display = 'block';
+            } else {
+                videoSection.style.display = 'none';
+            }
+
+            const recordingControls = document.getElementById('recordingControls');
+            if (recordingControls) {
+                recordingControls.style.display = currentUser.userType === 'supervisor' ? 'block' : 'none';
+            }
+
+            // Show video gallery only for supervisors
+            const videoGallery = document.getElementById('videoGallery');
+            if (currentUser.userType === 'supervisor') {
+                videoGallery.style.display = 'block';
+                loadSavedRecordings();
+            }
+
+            // Show supervisor button only for agents
+            const supervisorBtn = document.getElementById('supervisorBtn');
+            if (currentUser.userType === 'agent') {
+                supervisorBtn.style.display = 'inline-block';
+            } else {
+                supervisorBtn.style.display = 'none';
+            }
+
+            initializeSignalR();
+
+            const input = document.getElementById('messageInput');
+            if (input) {
+                input.oninput = () => onLocalTypingActivity();
+                input.onkeydown = () => onLocalTypingActivity();
+            }
+            if (currentUser.userType === 'agent') {
+                loadAvailableStaff();
+                loadActiveSessions();
+            }
+
+            if (currentUser.userType === 'user' && (!currentSession || !currentSession.CollaborationId)) {
+                createNewSession();
+            }
+        }
+
+        function setChatEnabled(enabled) {
+            const input = document.getElementById('messageInput');
+            const btn = document.getElementById('sendMessageBtn');
+            const requestBtn = document.getElementById('requestAgentBtn');
+            if (input) input.disabled = !enabled;
+            if (btn) btn.disabled = !enabled;
+            if (requestBtn) requestBtn.disabled = !enabled;
+        }
+
+        function getCurrentCollaborationId() {
+            const id = currentSession?.CollaborationId;
+            return (id && typeof id === 'string') ? id.trim() : '';
+        }
+
+        // Initialize SignalR
+        function initializeSignalR() {
+            connection = new signalR.HubConnectionBuilder()
+                .withUrl(HUB_URL + `?userType=${currentUser.userType}&userId=${currentUser.id || 1}`)
+                .withAutomaticReconnect()
+                .build();
+
+            connection.onreconnected(async () => {
+                try {
+                    if (currentSession?.CollaborationId) {
+                        await connection.invoke('JoinCollaboration', currentSession.CollaborationId);
+                    }
+                } catch (e) {
+                    console.error('Failed to re-join collaboration after reconnect', e);
+                }
+            });
+
+            // Set up event handlers
+            connection.on("ReceiveMessage", (message) => {
+                addMessageToChat(message);
+            });
+
+            connection.on("Typing", (data) => {
+                const isTyping = data?.isTyping ?? data?.IsTyping;
+                const userType = data?.userType || data?.UserType || '';
+                if (typeof isTyping !== 'boolean') return;
+
+                const typingIndicator = document.getElementById('typingIndicator');
+                const typingText = document.getElementById('typingText');
+                if (!typingIndicator || !typingText) return;
+
+                if (isTyping) {
+                    const label = userType ? `${userType} typing` : 'Someone is typing';
+                    typingText.textContent = label;
+                    typingIndicator.classList.add('active');
+                } else {
+                    typingIndicator.classList.remove('active');
+                }
+            });
+
+            async function applyAssignedSession(data) {
+                const collaborationId = data?.collaborationId || data?.CollaborationId;
+                if (!collaborationId) return;
+
+                currentSession = {
+                    CollaborationId: collaborationId,
+                    SessionId: currentSession?.SessionId || null,
+                    StartedAt: currentSession?.StartedAt || null
+                };
+                localStorage.setItem('currentSession', JSON.stringify(currentSession));
+
+                document.getElementById('collaborationId').textContent = collaborationId;
+                setChatEnabled(true);
+                clearChat();
+
+                await ensureConnected();
+                await connection.invoke('JoinCollaboration', collaborationId);
+                loadSessionInfo();
+                addSystemMessage(`Assigned to session ${collaborationId}`);
+            }
+
+            connection.on("AssignedToSession", async (data) => {
+                try {
+                    await applyAssignedSession(data);
+                } catch (e) {
+                    console.error('AssignedToSession handler failed', e);
+                }
+            });
+
+            connection.on("ChatHistory", (messages) => {
+                messages.forEach(msg => addMessageToChat(msg));
+            });
+
+            connection.on("UserJoined", (data) => {
+                const userType = data?.userType || data?.UserType;
+                const userId = data?.userId || data?.UserId;
+                addSystemMessage(`${userType} ${userId} joined the session`);
+                updateConnectionStatus(true);
+            });
+
+            connection.on("UserLeft", (data) => {
+                const userType = data?.userType || data?.UserType;
+                const userId = data?.userId || data?.UserId;
+                addSystemMessage(`${userType} ${userId} left the session`);
+            });
+
+            connection.on("AgentAssigned", (data) => {
+                const agentName = data?.agentName || data?.AgentName;
+                addSystemMessage(`Agent ${agentName || ''} has been assigned to this session`);
+                loadSessionInfo();
+            });
+
+            connection.on("SupervisorAdded", (data) => {
+                const supervisorName = data?.supervisorName || data?.SupervisorName;
+                addSystemMessage(`Supervisor ${supervisorName || ''} has joined the session`);
+                loadSessionInfo();
+            });
+
+            connection.on("ScreenShareStarted", (data) => {
+                addSystemMessage('Screen sharing started');
+            });
+
+            connection.on("ScreenShareStopped", () => {
+                addSystemMessage('Screen sharing stopped');
+                stopViewingStream();
+            });
+
+            connection.on("RecordingStarted", (data) => {
+                addSystemMessage('Recording started');
+                updateRecordingStatus(true);
+            });
+
+            connection.on("RecordingStopped", (data) => {
+                addSystemMessage('Recording stopped');
+                updateRecordingStatus(false);
+            });
+
+            connection.on("AvailableSupervisors", (supervisors) => {
+                showSupervisorSelection(supervisors);
+            });
+
+            // WebRTC signaling events
+            connection.on("ReceiveWebRTCOffer", async (offer) => {
+                await handleWebRTCOffer(offer);
+            });
+
+            connection.on("ReceiveWebRTCAnswer", async (answer) => {
+                await handleWebRTCAnswer(answer);
+            });
+
+            connection.on("ReceiveWebRTCIceCandidate", async (candidate) => {
+                await handleWebRTCIceCandidate(candidate);
+            });
+
+            connection.on("Error", (error) => {
+                alert('Error: ' + error);
+            });
+
+            // Start connection
+            connectionStartPromise = connection.start()
+                .then(() => {
+                    updateConnectionStatus(true);
+                    console.log('Connected to SignalR hub');
+
+                    if (currentSession?.CollaborationId) {
+                        return connection.invoke('JoinCollaboration', currentSession.CollaborationId)
+                            .then(() => setChatEnabled(true))
+                            .catch(err => {
+                                console.error('Auto-join collaboration failed', err);
+                                try {
+                                    localStorage.removeItem('currentSession');
+                                } catch { }
+                                currentSession = null;
+                                setChatEnabled(false);
+                            });
+                    }
+
+                    if (currentUser?.userType === 'agent') {
+                        return connection.invoke('GetMyAssignedSession')
+                            .then(async (assigned) => {
+                                if (assigned) {
+                                    if (!currentUser?.name) {
+                                        currentUser.name = assigned?.agentName || assigned?.AgentName || currentUser?.name || '';
+                                        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                                    }
+                                    const chatTitleSuffix = document.getElementById('chatTitleSuffix');
+                                    if (chatTitleSuffix) {
+                                        chatTitleSuffix.textContent = `(${(currentUser?.name || currentUser?.email || '').trim()})`;
+                                    }
+                                    await applyAssignedSession(assigned);
+                                } else {
+                                    setChatEnabled(false);
+                                }
+                            })
+                            .catch(err => console.error('GetMyAssignedSession failed', err));
+                    }
+                })
+                .catch(err => {
+                    console.error('SignalR connection error:', err);
+                    updateConnectionStatus(false);
+                    throw err;
+                });
+        }
+
+        let typingStopTimer = null;
+        let typingSent = false;
+
+        async function setTyping(isTyping) {
+            try {
+                if (!currentSession?.CollaborationId) return;
+                if (!connection) return;
+                await ensureConnected();
+                await connection.invoke('SetTyping', currentSession.CollaborationId, isTyping);
+            } catch (e) {
+                console.error('Failed to send typing state', e);
+            }
+        }
+
+        function onLocalTypingActivity() {
+            if (!typingSent) {
+                typingSent = true;
+                setTyping(true);
+            }
+
+            if (typingStopTimer) {
+                clearTimeout(typingStopTimer);
+            }
+            typingStopTimer = setTimeout(() => {
+                typingSent = false;
+                setTyping(false);
+            }, 900);
+        }
+
+        async function ensureConnected() {
+            if (!connection) {
+                throw new Error('SignalR connection not initialized');
+            }
+
+            if (connection.state === signalR.HubConnectionState.Connected) {
+                return;
+            }
+
+            if (connectionStartPromise) {
+                await connectionStartPromise;
+                return;
+            }
+
+            if (connection.state === signalR.HubConnectionState.Disconnected) {
+                connectionStartPromise = connection.start();
+                await connectionStartPromise;
+            }
+            updateConnectionStatus(true);
+        }
+
+        // Create new session
+        async function createNewSession() {
+            try {
+                setChatEnabled(false);
+                const response = await fetch(`${API_BASE_URL}/collaboration/session/create`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ userId: currentUser?.id || 1, applicationId: 1 })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const collaborationId = data?.collaborationId || data?.CollaborationId;
+                    const sessionId = data?.sessionId || data?.SessionId;
+                    const startedAt = data?.startedAt || data?.StartedAt;
+
+                    currentSession = {
+                        CollaborationId: collaborationId,
+                        SessionId: sessionId,
+                        StartedAt: startedAt
+                    };
+                    localStorage.setItem('currentSession', JSON.stringify(currentSession));
+                    document.getElementById('collaborationId').textContent = collaborationId || '';
+                    console.log('Created session', collaborationId);
+
+                    if (!collaborationId) {
+                        setChatEnabled(false);
+                        alert('Session creation succeeded but collaboration id is missing');
+                        return;
+                    }
+                    
+                    // Join SignalR group
+                    await ensureConnected();
+                    await connection.invoke("JoinCollaboration", (collaborationId || '').toString().trim());
+                    setChatEnabled(true);
+                    
+                    // Clear chat and load session info
+                    clearChat();
+                    loadSessionInfo();
+                } else {
+                    const error = await response.text();
+                    alert('Failed to create session: ' + error);
+                }
+            } catch (error) {
+                alert('Session creation error: ' + error.message);
+            }
+        }
+
+        async function loadActiveSessions() {
+            if (!currentUser || currentUser.userType !== 'supervisor') return;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/collaboration/sessions/active`);
+                if (!response.ok) {
+                    const error = await response.text();
+                    console.error('Failed to load active sessions:', error);
+                    return;
+                }
+
+                const sessions = await response.json();
+                const list = document.getElementById('activeSessionsList');
+                if (!list) return;
+
+                list.innerHTML = '';
+                if (!sessions || sessions.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'text-sm text-gray-500';
+                    empty.textContent = 'No active sessions.';
+                    list.appendChild(empty);
+                    return;
+                }
+
+                sessions.forEach(s => {
+                    const collaborationId = s?.collaborationId || s?.CollaborationId;
+                    if (!collaborationId) {
+                        return;
+                    }
+                    const userId = s?.userId ?? s?.UserId;
+                    const agentId = s?.agentId ?? s?.AgentId;
+                    const div = document.createElement('div');
+                    div.className = 'flex justify-between items-center p-2 bg-gray-50 rounded';
+                    const startedAt = s?.startedAt || s?.StartedAt;
+                    const started = startedAt ? new Date(startedAt).toLocaleTimeString() : '';
+                    div.innerHTML = `
+                        <div class="text-sm">
+                            <div class="font-medium">${collaborationId}</div>
+                            <div class="text-xs text-gray-500">Started: ${started} • User: ${userId ?? ''} • Agent: ${agentId ?? ''}</div>
+                        </div>
+                        <button class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600">Join</button>
+                    `;
+
+                    const btn = div.querySelector('button');
+                    btn.addEventListener('click', () => joinExistingSession(collaborationId));
+                    list.appendChild(div);
+                });
+            } catch (e) {
+                console.error('Error loading active sessions:', e);
+            }
+        }
+
+        async function joinExistingSession(collaborationId) {
+            if (!collaborationId) return;
+
+            try {
+                await ensureConnected();
+                currentSession = { CollaborationId: collaborationId };
+                localStorage.setItem('currentSession', JSON.stringify(currentSession));
+                document.getElementById('collaborationId').textContent = collaborationId;
+                console.log('Joining session', collaborationId);
+                await connection.invoke('JoinCollaboration', collaborationId);
+                setChatEnabled(true);
+                clearChat();
+                loadSessionInfo();
+            } catch (e) {
+                alert('Failed to join session: ' + (e.message || e));
+            }
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            if (!currentSession || !currentSession.CollaborationId) {
+                alert('Session is not ready yet. Please wait a moment and try again.');
+                return;
+            }
+
+            try {
+                await ensureConnected();
+                if (typingSent) {
+                    typingSent = false;
+                    setTyping(false);
+                }
+                await connection.invoke("SendMessage", currentSession.CollaborationId, message);
+                input.value = '';
+            } catch (error) {
+                alert('Failed to send message: ' + error.message);
+            }
+        }
+
+        // Handle message input key press
+        function handleMessageKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        // Add message to chat
+        function addMessageToChat(message) {
+            const container = document.getElementById('messagesContainer');
+            const messageDiv = document.createElement('div');
+
+            const senderType = message?.senderType || message?.SenderType || '';
+            const content = message?.content || message?.Content || '';
+            const sentAt = message?.sentAt || message?.SentAt;
+            const isMine = senderType && currentUser?.userType && senderType.toString().toLowerCase() === currentUser.userType.toString().toLowerCase();
+
+            messageDiv.className = `mb-3 p-2 rounded ${isMine ? 'bg-blue-100 ml-8' : 'bg-gray-100 mr-8'}`;
+            
+            const time = sentAt ? new Date(sentAt).toLocaleTimeString() : '';
+            messageDiv.innerHTML = `
+                <div class="flex justify-between items-start mb-1">
+                    <span class="font-semibold text-sm">${senderType}</span>
+                    <span class="text-xs text-gray-500">${time}</span>
+                </div>
+                <div class="text-sm">${content}</div>
+            `;
+            
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Add system message
+        function addSystemMessage(message) {
+            const container = document.getElementById('messagesContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'mb-3 p-2 rounded bg-yellow-50 text-center text-sm text-gray-600';
+            messageDiv.textContent = message;
+            
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Clear chat
+        function clearChat() {
+            document.getElementById('messagesContainer').innerHTML = '';
+        }
+
+        // Request agent
+        async function requestAgent() {
+            const collaborationId = getCurrentCollaborationId();
+            if (!collaborationId) {
+                await createNewSession();
+            }
+
+            const id = getCurrentCollaborationId();
+            if (!id) {
+                alert('Please wait for the session to be created before requesting an agent');
+                return;
+            }
+
+            try {
+                await ensureConnected();
+                await connection.invoke("RequestAgent", id);
+            } catch (error) {
+                alert('Failed to request agent: ' + error.message);
+            }
+        }
+
+        // Request supervisor
+        async function requestSupervisor() {
+            if (!currentSession || !currentSession.CollaborationId) {
+                alert('Please create a session first');
+                return;
+            }
+
+            try {
+                await ensureConnected();
+                await connection.invoke("RequestSupervisor", currentSession.CollaborationId);
+            } catch (error) {
+                alert('Failed to request supervisor: ' + error.message);
+            }
+        }
+
+        // Show supervisor selection
+        function showSupervisorSelection(supervisors) {
+            const supervisorList = document.getElementById('supervisorsList');
+            supervisorList.innerHTML = '';
+
+            supervisors.forEach(supervisor => {
+                const name = supervisor?.Name || supervisor?.name || '';
+                const department = supervisor?.Department || supervisor?.department || 'N/A';
+                const id = supervisor?.Id ?? supervisor?.id;
+                const div = document.createElement('div');
+                div.className = 'flex justify-between items-center p-2 bg-gray-50 rounded';
+                div.innerHTML = `
+                    <span class="text-sm">${name || 'Unknown'} (${department})</span>
+                    <button onclick="addSupervisor(${id})" class="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600">
+                        Add
+                    </button>
+                `;
+                supervisorList.appendChild(div);
+            });
+        }
+
+        // Add supervisor
+        async function addSupervisor(supervisorId) {
+            if (!currentSession) return;
+
+            try {
+                await ensureConnected();
+                await connection.invoke("AddSupervisor", currentSession.CollaborationId, supervisorId);
+            } catch (error) {
+                alert('Failed to add supervisor: ' + error.message);
+            }
+        }
+
+        // Screen sharing functions
+        async function startScreenShare() {
+            if (!currentSession) {
+                alert('Please create a session first');
+                return;
+            }
+
+            try {
+                localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                
+                // Setup local video preview for the sharer
+                const localVideo = document.getElementById('localVideo');
+                if (localVideo) {
+                    localVideo.srcObject = localStream;
+                    localVideo.style.display = 'block';
+                }
+                
+                // Start WebRTC connection for streaming
+                await startWebRTCConnection();
+                
+                await ensureConnected();
+                await connection.invoke("StartScreenShare", currentSession.CollaborationId);
+
+                // Auto-start recording when sharing starts
+                await startRecording();
+            } catch (error) {
+                alert('Failed to start screen sharing: ' + error.message);
+            }
+        }
+
+        async function stopScreenShare() {
+            // Stop recording first so MediaRecorder can finalize while tracks are still alive
+            try {
+                await stopRecording();
+            } catch (e) {
+                console.error('Failed to stop recording during stopScreenShare', e);
+            }
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+
+            // Hide local video
+            const localVideo = document.getElementById('localVideo');
+            if (localVideo) {
+                localVideo.style.display = 'none';
+                localVideo.srcObject = null;
+            }
+
+            // Close WebRTC connection
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+
+            if (currentSession) {
+                await ensureConnected();
+                await connection.invoke("StopScreenShare", currentSession.CollaborationId);
+            }
+        }
+
+        // WebRTC functions
+        function ensurePeerConnection() {
+            if (peerConnection) return peerConnection;
+
+            const forceRelay = new URLSearchParams(window.location.search).get('forceRelay') === '1';
+
+            const configuration = {
+                iceTransportPolicy: forceRelay ? 'relay' : 'all',
+                iceServers: [
+                    { urls: 'stun:57.151.97.238:3478' },
+                    {
+                        urls: [
+                            'turn:57.151.97.238:3478?transport=udp',
+                            'turn:57.151.97.238:3478?transport=tcp'
+                        ],
+                        username: 'readi',
+                        credential: 'NASS9411!!!'
+                    }
+                ]
+            };
+
+            peerConnection = new RTCPeerConnection(configuration);
+
+            peerConnection.ontrack = (event) => {
+                const [remoteStream] = event.streams;
+                const video = document.getElementById('videoPlayer');
+                if (video) {
+                    video.srcObject = remoteStream;
+                    video.style.display = 'block';
+                    const playPromise = video.play();
+                    if (playPromise && typeof playPromise.catch === 'function') {
+                        playPromise.catch(() => {});
+                    }
+                    const placeholder = document.getElementById('videoPlaceholder');
+                    if (placeholder) placeholder.style.display = 'none';
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate && connection && currentSession?.CollaborationId) {
+                    connection.invoke("SendWebRTCIceCandidate", currentSession.CollaborationId, event.candidate)
+                        .catch(err => console.error('Failed to send ICE candidate', err));
+                }
+            };
+
+            return peerConnection;
+        }
+
+        async function startWebRTCConnection() {
+            // Caller (screen sharer) flow: must have localStream and sends offer
+            if (!localStream) {
+                throw new Error('No local stream available for screen sharing');
+            }
+
+            const pc = ensurePeerConnection();
+
+            // Add local stream tracks (only for caller)
+            localStream.getTracks().forEach(track => {
+                pc.addTrack(track, localStream);
+            });
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            await connection.invoke("SendWebRTCOffer", currentSession.CollaborationId, offer);
+        }
+
+        // Recording functions
+        let mediaRecorder = null;
+        let recordedChunks = [];
+
+        async function startRecording() {
+            if (!currentSession || !currentSession.CollaborationId) {
+                alert('Please create a session first');
+                return;
+            }
+
+            try {
+                // Start API recording
+                const response = await fetch(`${API_BASE_URL}/collaboration/session/${currentSession.CollaborationId}/recording/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Start actual browser recording if we have a stream
+                    if (localStream) {
+                        recordedChunks = [];
+                        mediaRecorder = new MediaRecorder(localStream, {
+                            mimeType: 'video/webm'
+                        });
+
+                        mediaRecorder.ondataavailable = (event) => {
+                            if (event.data.size > 0) {
+                                recordedChunks.push(event.data);
+                            }
+                        };
+
+                        mediaRecorder.onstop = async () => {
+                            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                            await saveRecordingLocally(blob, currentSession.CollaborationId);
+                        };
+
+                        mediaRecorder.start();
+                        addSystemMessage('Recording started locally');
+                    }
+                }
+            } catch (error) {
+                alert('Failed to start recording: ' + error.message);
+            }
+        }
+
+        async function stopRecording() {
+            if (!currentSession || !currentSession.CollaborationId) return;
+
+            try {
+                // Stop browser recording
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                    mediaRecorder = null;
+                }
+
+                // Stop API recording
+                await fetch(`${API_BASE_URL}/collaboration/session/${currentSession.CollaborationId}/recording/stop`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                addSystemMessage('Recording stopped and saved locally');
+            } catch (error) {
+                alert('Failed to stop recording: ' + error.message);
+            }
+        }
+
+        async function saveRecordingLocally(blob, collaborationId) {
+            try {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const filename = `${collaborationId}_${timestamp}.webm`;
+
+                // Save to server (local storage under wwwroot/recordings)
+                await uploadRecordingToServer(blob, filename);
+                if (currentUser?.userType === 'supervisor') {
+                    addSystemMessage(`Recording saved: ${filename}`);
+                }
+            } catch (error) {
+                console.error('Failed to save recording:', error);
+                addSystemMessage('Failed to save recording locally');
+            }
+        }
+
+        async function uploadRecordingToServer(blob, filename) {
+            try {
+                const formData = new FormData();
+                formData.append('file', blob, filename);
+                formData.append('collaborationId', currentSession.CollaborationId);
+
+                const response = await fetch(`${API_BASE_URL}/recording/session/${currentSession.CollaborationId}/recording/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (currentUser?.userType === 'supervisor') {
+                        addSystemMessage(`Recording uploaded to server: ${data.recordingUrl}`);
+                    }
+                    
+                    // Refresh recordings list if user is supervisor
+                    if (currentUser.userType === 'supervisor') {
+                        loadSavedRecordings();
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to upload recording:', error);
+            }
+        }
+
+        // Load saved recordings for supervisors
+        async function loadSavedRecordings() {
+            if (currentUser.userType !== 'supervisor') return;
+
+            try {
+                // Load recordings for current session or all sessions
+                const collaborationId = currentSession?.CollaborationId || 'all';
+                const response = await fetch(`${API_BASE_URL}/recording/session/${collaborationId}/recordings`);
+                
+                if (response.ok) {
+                    const recordings = await response.json();
+                    displayRecordings(recordings);
+                }
+            } catch (error) {
+                console.error('Failed to load recordings:', error);
+            }
+        }
+
+        // Display recordings in the gallery
+        function displayRecordings(recordings) {
+            const recordingsList = document.getElementById('recordingsList');
+            
+            if (recordings.length === 0) {
+                recordingsList.innerHTML = '<p class="text-sm text-gray-500">No recordings available</p>';
+                return;
+            }
+
+            recordingsList.innerHTML = recordings.map(rec => `
+                <div class="border rounded p-2 hover:bg-gray-50">
+                    <div class="flex justify-between items-start mb-1">
+                        <div class="flex-1">
+                            <p class="text-sm font-medium truncate">${rec.fileName}</p>
+                            <p class="text-xs text-gray-500">${formatFileSize(rec.size)} • ${formatDate(rec.created)}</p>
+                        </div>
+                        <div class="flex space-x-1 ml-2">
+                            <button onclick="playRecording('${rec.url}', '${rec.fileName}')" class="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600">
+                                <i class="fas fa-play"></i>
+                            </button>
+                            <button onclick="downloadRecording('${rec.url}', '${rec.fileName}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600">
+                                <i class="fas fa-download"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Play recording in video player
+        async function playRecording(url, filename) {
+            const video = document.getElementById('videoPlayer');
+            const placeholder = document.getElementById('videoPlaceholder');
+            
+            try {
+                video.src = url;
+                video.style.display = 'block';
+                placeholder.style.display = 'none';
+                video.play();
+                
+                addSystemMessage(`Now playing: ${filename}`);
+            } catch (error) {
+                console.error('Failed to play recording:', error);
+                addSystemMessage('Failed to play recording');
+            }
+        }
+
+        // Download recording
+        function downloadRecording(url, filename) {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            addSystemMessage(`Downloaded: ${filename}`);
+        }
+
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Format date
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleString();
+        }
+
+        // WebRTC signaling handlers
+        async function handleWebRTCOffer(offer) {
+            try {
+                const pc = ensurePeerConnection();
+                await pc.setRemoteDescription(new RTCSessionDescription(offer));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                await connection.invoke("SendWebRTCAnswer", currentSession.CollaborationId, answer);
+            } catch (error) {
+                console.error('Error handling WebRTC offer:', error);
+            }
+        }
+
+        async function handleWebRTCAnswer(answer) {
+            try {
+                if (!peerConnection) {
+                    ensurePeerConnection();
+                }
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            } catch (error) {
+                console.error('Error handling WebRTC answer:', error);
+            }
+        }
+
+        async function handleWebRTCIceCandidate(candidate) {
+            try {
+                if (!peerConnection) {
+                    ensurePeerConnection();
+                }
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (error) {
+                console.error('Error handling ICE candidate:', error);
+            }
+        }
+
+        // Load available staff
+        async function loadAvailableStaff() {
+            try {
+                const [agentsResponse, supervisorsResponse] = await Promise.all([
+                    fetch(`${API_BASE_URL}/management/agents/available`, {
+                        headers: { 'Content-Type': 'application/json' }
+                    }),
+                    fetch(`${API_BASE_URL}/management/supervisors/available`, {
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                ]);
+
+                if (agentsResponse.ok) {
+                    const agents = await agentsResponse.json();
+                    displayAgents(agents);
+                }
+
+                if (supervisorsResponse.ok) {
+                    const supervisors = await supervisorsResponse.json();
+                    displaySupervisors(supervisors);
+                }
+            } catch (error) {
+                console.error('Failed to load staff:', error);
+            }
+        }
+
+        // Display agents
+        function displayAgents(agents) {
+            const agentsList = document.getElementById('agentsList');
+            agentsList.innerHTML = '';
+
+            if (agents.length === 0) {
+                agentsList.innerHTML = '<p class="text-sm text-gray-500">No agents available</p>';
+                return;
+            }
+
+            agents.forEach(agent => {
+                const name = agent?.Name || agent?.name || '';
+                const isAvailable = agent?.IsAvailable ?? agent?.isAvailable;
+                const department = agent?.Department || agent?.department || 'N/A';
+                const div = document.createElement('div');
+                div.className = 'flex justify-between items-center p-2 bg-gray-50 rounded';
+                div.innerHTML = `
+                    <span class="text-sm">${name || 'Unknown'} ${isAvailable ? '(Available)' : '(Busy)'}</span>
+                    <span class="text-xs text-gray-500">${department}</span>
+                `;
+                agentsList.appendChild(div);
+            });
+        }
+
+        // Display supervisors
+        function displaySupervisors(supervisors) {
+            const supervisorsList = document.getElementById('supervisorsList');
+            supervisorsList.innerHTML = '';
+
+            if (supervisors.length === 0) {
+                supervisorsList.innerHTML = '<p class="text-sm text-gray-500">No supervisors available</p>';
+                return;
+            }
+
+            supervisors.forEach(supervisor => {
+                const name = supervisor?.Name || supervisor?.name || '';
+                const isAvailable = supervisor?.IsAvailable ?? supervisor?.isAvailable;
+                const department = supervisor?.Department || supervisor?.department || 'N/A';
+                const div = document.createElement('div');
+                div.className = 'flex justify-between items-center p-2 bg-gray-50 rounded';
+                div.innerHTML = `
+                    <span class="text-sm">${name || 'Unknown'} ${isAvailable ? '(Available)' : '(Busy)'}</span>
+                    <span class="text-xs text-gray-500">${department}</span>
+                `;
+                supervisorsList.appendChild(div);
+            });
+        }
+
+        // Load session info
+        async function loadSessionInfo() {
+            if (!currentSession || !currentSession.CollaborationId) {
+                if (currentSession && !currentSession.CollaborationId) {
+                    localStorage.removeItem('currentSession');
+                    currentSession = null;
+                    setChatEnabled(false);
+                }
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/collaboration/session/${currentSession.CollaborationId}`, {
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (response.ok) {
+                    const session = await response.json();
+                    displaySessionInfo(session);
+                }
+            } catch (error) {
+                console.error('Failed to load session info:', error);
+            }
+        }
+
+        // Display session info
+        function displaySessionInfo(session) {
+            const infoDiv = document.getElementById('sessionInfo');
+
+            const status = session?.Status || session?.status || '';
+            const startedAt = session?.StartedAt || session?.startedAt;
+            const endedAt = session?.EndedAt || session?.endedAt;
+            const isRecording = session?.IsRecording ?? session?.isRecording;
+            const userName = session?.UserName || session?.userName || session?.User?.Name || session?.User?.name || session?.user?.Name || session?.user?.name || '';
+            const agentName = session?.AgentName || session?.agentName || session?.Agent?.Name || session?.Agent?.name || session?.agent?.Name || session?.agent?.name || '';
+            infoDiv.innerHTML = `
+                <p><strong>Status:</strong> ${status || ''}</p>
+                <p><strong>Started:</strong> ${startedAt ? new Date(startedAt).toLocaleString() : ''}</p>
+                ${endedAt ? `<p><strong>Ended:</strong> ${new Date(endedAt).toLocaleString()}</p>` : ''}
+                <p><strong>User:</strong> ${userName || 'Unknown'}</p>
+                ${agentName ? `<p><strong>Agent:</strong> ${agentName}</p>` : '<p><strong>Agent:</strong> Not assigned</p>'}
+                <p><strong>Recording:</strong> ${isRecording ? 'Active' : 'Inactive'}</p>
+            `;
+        }
+
+        // Update connection status
+        function updateConnectionStatus(connected) {
+            const statusDiv = document.getElementById('connectionStatus');
+            if (connected) {
+                statusDiv.innerHTML = '<span class="text-green-500"><i class="fas fa-circle"></i> Connected</span>';
+            } else {
+                statusDiv.innerHTML = '<span class="text-red-500"><i class="fas fa-circle"></i> Disconnected</span>';
+            }
+        }
+
+        // Update recording status
+        function updateRecordingStatus(isRecording) {
+            // This would update the UI to show recording status
+            console.log('Recording status:', isRecording);
+        }
+
+        // Start viewing stream (for agents/supervisors)
+        async function startViewingStream(streamUrl) {
+            const video = document.getElementById('videoPlayer');
+            const placeholder = document.getElementById('videoPlaceholder');
+            
+            try {
+                video.src = streamUrl;
+                video.style.display = 'block';
+                placeholder.style.display = 'none';
+                video.play();
+            } catch (error) {
+                console.error('Failed to start viewing stream:', error);
+            }
+        }
+
+        // Stop viewing stream
+        function stopViewingStream() {
+            const video = document.getElementById('videoPlayer');
+            const placeholder = document.getElementById('videoPlaceholder');
+            
+            video.pause();
+            video.src = '';
+            video.style.display = 'none';
+            placeholder.style.display = 'flex';
+        }
+
+        // End session
+        async function endSession() {
+            if (!currentSession) return;
+
+            if (confirm('Are you sure you want to end this session?')) {
+                try {
+                    await fetch(`${API_BASE_URL}/collaboration/session/${currentSession.CollaborationId}/end`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+
+                    if (connection) {
+                        await connection.invoke("LeaveCollaboration", currentSession.CollaborationId);
+                    }
+
+                    currentSession = null;
+                    document.getElementById('collaborationId').textContent = '';
+                    clearChat();
+                    document.getElementById('sessionInfo').innerHTML = '';
+                } catch (error) {
+                    alert('Failed to end session: ' + error.message);
+                }
+            }
+        }
+
+        // Logout
+        function logout() {
+            if (connection) {
+                connection.stop();
+            }
+            
+            localStorage.removeItem('currentUser');
+            currentUser = null;
+            currentSession = null;
+            
+            document.getElementById('loginSection').classList.remove('hidden');
+            document.getElementById('collaborationSection').classList.add('hidden');
+            
+            // Reset form
+            document.getElementById('loginForm').reset();
+            switchUserType('user');
+        }
+    </script>
+</body>
+</html>
