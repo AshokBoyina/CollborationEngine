@@ -19,7 +19,9 @@ public class RecordingController : ControllerBase
         string CollaborationId,
         long Size,
         DateTime Created,
-        string Url);
+        string Url,
+        string? AgentName,
+        string? UserName);
 
     public RecordingController(
         ILocalDataService dataService,
@@ -85,6 +87,18 @@ public class RecordingController : ControllerBase
     {
         try
         {
+            var sessions = await _dataService.GetCollaborationSessionsAsync();
+            var agents = await _dataService.GetAgentsAsync();
+            var users = await _dataService.GetUsersAsync();
+
+            var sessionsByCollaborationId = sessions
+                .Where(s => !string.IsNullOrWhiteSpace(s.CollaborationId))
+                .GroupBy(s => s.CollaborationId.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.StartedAt).First(), StringComparer.OrdinalIgnoreCase);
+
+            var agentsById = agents.ToDictionary(a => a.Id, a => a);
+            var usersById = users.ToDictionary(u => u.Id, u => u);
+
             List<RecordingInfo> recordings;
 
             if (collaborationId.ToLower() == "all")
@@ -107,6 +121,10 @@ public class RecordingController : ControllerBase
                 {
                     var sessionId = Path.GetFileName(sessionDir);
                     var files = Directory.GetFiles(sessionDir, "*.webm");
+
+                    sessionsByCollaborationId.TryGetValue(sessionId, out var session);
+                    var agentName = (session?.AgentId != null && agentsById.TryGetValue(session.AgentId.Value, out var a)) ? a.Name : null;
+                    var userName = (session != null && usersById.TryGetValue(session.UserId, out var u)) ? u.Name : null;
                     
                     foreach (var file in files)
                     {
@@ -115,7 +133,9 @@ public class RecordingController : ControllerBase
                             CollaborationId: sessionId,
                             Size: new FileInfo(file).Length,
                             Created: new FileInfo(file).CreationTime,
-                            Url: $"{Request.Scheme}://{Request.Host}/recordings/{sessionId}/{Path.GetFileName(file)}"));
+                            Url: $"{Request.Scheme}://{Request.Host}/recordings/{sessionId}/{Path.GetFileName(file)}",
+                            AgentName: agentName,
+                            UserName: userName));
                     }
                 }
             }
@@ -130,13 +150,19 @@ public class RecordingController : ControllerBase
                     return Ok(new List<RecordingInfo>());
                 }
 
+                sessionsByCollaborationId.TryGetValue(collaborationId.Trim(), out var session);
+                var agentName = (session?.AgentId != null && agentsById.TryGetValue(session.AgentId.Value, out var a)) ? a.Name : null;
+                var userName = (session != null && usersById.TryGetValue(session.UserId, out var u)) ? u.Name : null;
+
                 recordings = Directory.GetFiles(recordingsPath, "*.webm")
                     .Select(file => new RecordingInfo(
                         FileName: Path.GetFileName(file),
                         CollaborationId: collaborationId,
                         Size: new FileInfo(file).Length,
                         Created: new FileInfo(file).CreationTime,
-                        Url: $"{Request.Scheme}://{Request.Host}/recordings/{collaborationId}/{Path.GetFileName(file)}"))
+                        Url: $"{Request.Scheme}://{Request.Host}/recordings/{collaborationId}/{Path.GetFileName(file)}",
+                        AgentName: agentName,
+                        UserName: userName))
                     .ToList();
             }
 

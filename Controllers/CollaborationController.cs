@@ -62,6 +62,12 @@ public class CollaborationController : ControllerBase
     public async Task<IActionResult> GetActiveSessions()
     {
         var sessions = await _dataService.GetCollaborationSessionsAsync();
+        var agents = await _dataService.GetAgentsAsync();
+        var users = await _dataService.GetUsersAsync();
+
+        var agentsById = agents.ToDictionary(a => a.Id, a => a);
+        var usersById = users.ToDictionary(u => u.Id, u => u);
+
         var active = sessions
             .Where(s => string.Equals(s.Status, "Active", StringComparison.OrdinalIgnoreCase) && s.EndedAt == null)
             .OrderByDescending(s => s.StartedAt)
@@ -71,7 +77,9 @@ public class CollaborationController : ControllerBase
                 s.CollaborationId,
                 s.StartedAt,
                 s.UserId,
-                s.AgentId
+                s.AgentId,
+                UserName = usersById.TryGetValue(s.UserId, out var u) ? u.Name : null,
+                AgentName = s.AgentId != null && agentsById.TryGetValue(s.AgentId.Value, out var a) ? a.Name : null
             })
             .ToList();
 

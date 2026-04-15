@@ -180,7 +180,7 @@
                     <!-- Active Sessions (Supervisor Only) -->
                     <div class="bg-white rounded-lg shadow-md p-4 mb-4" id="activeSessionsSection" style="display:none;">
                         <h3 class="text-lg font-semibold mb-4">Active Sessions</h3>
-                        <div id="activeSessionsList" class="space-y-2">
+                        <div id="activeSessionsList" class="space-y-2 max-h-64 overflow-y-auto">
                             <!-- Active sessions will be populated here -->
                         </div>
                         <button onclick="loadActiveSessions()" class="mt-3 w-full bg-blue-500 text-white px-3 py-2 rounded text-sm hover:bg-blue-600">
@@ -203,15 +203,9 @@
                             </div>
                         </div>
 
-                        <!-- Recording Controls -->
-                        <div class="space-y-2" id="recordingControls">
-                            <button onclick="startRecording()" class="w-full bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">
-                                <i class="fas fa-record-vinyl mr-2"></i>Start Recording
-                            </button>
-                            <button onclick="stopRecording()" class="w-full bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">
-                                <i class="fas fa-stop-circle mr-2"></i>Stop Recording
-                            </button>
-                        </div>
+                        <button id="resumeStreamBtn" onclick="resumeViewingStream()" class="w-full bg-indigo-500 text-white px-3 py-2 rounded text-sm hover:bg-indigo-600" style="display:none;">
+                            Resume Stream
+                        </button>
 
                         <!-- Video Gallery for Supervisors -->
                         <div id="videoGallery" class="mt-4" style="display:none;">
@@ -263,8 +257,26 @@
         let currentUser = null;
         let currentSession = null;
         let peerConnection = null;
+        let publisherPeerConnections = {};
+        let remotePublisherConnectionId = null;
         let localStream = null;
         let currentStream = null;
+
+        let isFreshLoginFromHome = false;
+        let suppressNextChatHistory = false;
+
+        const wasPageReload = (() => {
+            try {
+                const navEntries = performance.getEntriesByType?.('navigation');
+                const navType = Array.isArray(navEntries) && navEntries.length > 0 ? navEntries[0].type : null;
+                if (navType) return navType === 'reload' || navType === 'back_forward';
+                // Legacy fallback
+                // @ts-ignore
+                return performance?.navigation?.type === 1;
+            } catch {
+                return false;
+            }
+        })();
 
         // Configuration
         const API_BASE_URL = window.location.origin + '/api';
@@ -274,6 +286,17 @@
         document.addEventListener('DOMContentLoaded', function() {
             checkExistingSession();
             switchUserType('user');
+        });
+
+        window.addEventListener('beforeunload', function() {
+            try {
+                cleanupWebRTC();
+            } catch { }
+            try {
+                if (connection) {
+                    connection.stop();
+                }
+            } catch { }
         });
 
         // User type switching
@@ -359,6 +382,7 @@
                     };
 
                     localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    isFreshLoginFromHome = true;
                     showCollaborationSection();
                 } else {
                     const error = await response.text();
@@ -392,6 +416,17 @@
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('collaborationSection').classList.remove('hidden');
             document.getElementById('userRole').textContent = currentUser.userType.charAt(0).toUpperCase() + currentUser.userType.slice(1);
+
+            clearChat();
+            const typingIndicator = document.getElementById('typingIndicator');
+            if (typingIndicator) {
+                typingIndicator.classList.remove('active');
+            }
+
+            if (isFreshLoginFromHome) {
+                suppressNextChatHistory = true;
+                isFreshLoginFromHome = false;
+            }
 
             const chatTitleSuffix = document.getElementById('chatTitleSuffix');
             if (chatTitleSuffix) {
@@ -442,9 +477,12 @@
                 videoSection.style.display = 'none';
             }
 
-            const recordingControls = document.getElementById('recordingControls');
-            if (recordingControls) {
-                recordingControls.style.display = currentUser.userType === 'supervisor' ? 'block' : 'none';
+            const resumeStreamBtn = document.getElementById('resumeStreamBtn');
+            if (resumeStreamBtn) {
+                const isViewer = currentUser.userType === 'agent' || currentUser.userType === 'supervisor';
+                const show = isViewer && wasPageReload;
+                resumeStreamBtn.style.display = show ? 'inline-flex' : 'none';
+                resumeStreamBtn.disabled = !show;
             }
 
             // Show video gallery only for supervisors
@@ -474,6 +512,10 @@
                 loadActiveSessions();
             }
 
+            if (currentUser.userType === 'supervisor') {
+                loadActiveSessions();
+            }
+
             if (currentUser.userType === 'user' && (!currentSession || !currentSession.CollaborationId)) {
                 createNewSession();
             }
@@ -493,6 +535,40 @@
             return (id && typeof id === 'string') ? id.trim() : '';
         }
 
+        let joinedCollaborationId = null;
+
+        async function joinCollaborationOnce(collaborationId) {
+            const id = (collaborationId || '').toString().trim();
+            if (!id) return;
+            if (joinedCollaborationId === id) return;
+            if (!connection) {
+                throw new Error('SignalR connection not initialized');
+            }
+            if (connection.state !== signalR.HubConnectionState.Connected) {
+                await ensureConnected();
+            }
+            await connection.invoke('JoinCollaboration', id);
+            joinedCollaborationId = id;
+        }
+
+        async function leaveCollaborationIfJoined(collaborationId) {
+            const id = (collaborationId || '').toString().trim();
+            if (!id) return;
+            if (!connection) {
+                if (joinedCollaborationId === id) joinedCollaborationId = null;
+                return;
+            }
+
+            try {
+                await ensureConnected();
+                await connection.invoke('LeaveCollaboration', id);
+            } catch (e) {
+                console.error('LeaveCollaboration failed', e);
+            } finally {
+                if (joinedCollaborationId === id) joinedCollaborationId = null;
+            }
+        }
+
         // Initialize SignalR
         function initializeSignalR() {
             connection = new signalR.HubConnectionBuilder()
@@ -503,7 +579,16 @@
             connection.onreconnected(async () => {
                 try {
                     if (currentSession?.CollaborationId) {
-                        await connection.invoke('JoinCollaboration', currentSession.CollaborationId);
+                        joinedCollaborationId = null;
+                        await joinCollaborationOnce(currentSession.CollaborationId);
+
+                        try {
+                            if (currentUser?.userType === 'agent' || currentUser?.userType === 'supervisor') {
+                                await connection.invoke('ViewerReady', currentSession.CollaborationId);
+                            }
+                        } catch (e) {
+                            console.error('ViewerReady invoke failed after reconnect auto-join', e);
+                        }
                     }
                 } catch (e) {
                     console.error('Failed to re-join collaboration after reconnect', e);
@@ -548,10 +633,17 @@
                 setChatEnabled(true);
                 clearChat();
 
-                await ensureConnected();
-                await connection.invoke('JoinCollaboration', collaborationId);
+                await joinCollaborationOnce(collaborationId);
                 loadSessionInfo();
                 addSystemMessage(`Assigned to session ${collaborationId}`);
+
+                try {
+                    if (currentUser?.userType === 'supervisor' || currentUser?.userType === 'agent') {
+                        await connection.invoke('ViewerReady', collaborationId);
+                    }
+                } catch (e) {
+                    console.error('ViewerReady invoke failed after AssignedToSession', e);
+                }
             }
 
             connection.on("AssignedToSession", async (data) => {
@@ -563,6 +655,10 @@
             });
 
             connection.on("ChatHistory", (messages) => {
+                if (suppressNextChatHistory) {
+                    suppressNextChatHistory = false;
+                    return;
+                }
                 messages.forEach(msg => addMessageToChat(msg));
             });
 
@@ -593,6 +689,28 @@
 
             connection.on("ScreenShareStarted", (data) => {
                 addSystemMessage('Screen sharing started');
+
+                try {
+                    if (!connection) return;
+                    if (!(currentUser?.userType === 'agent' || currentUser?.userType === 'supervisor')) return;
+
+                    const collaborationId = data?.collaborationId || data?.CollaborationId || currentSession.CollaborationId;
+                    if (!collaborationId) return;
+
+                    if (!currentSession?.CollaborationId || currentSession.CollaborationId !== collaborationId) {
+                        currentSession = { ...(currentSession || {}), CollaborationId: collaborationId };
+                        try { localStorage.setItem('currentSession', JSON.stringify(currentSession)); } catch { }
+                        const idSpan = document.getElementById('collaborationId');
+                        if (idSpan) idSpan.textContent = collaborationId;
+                        setChatEnabled(true);
+                    }
+
+                    joinCollaborationOnce(collaborationId)
+                        .then(() => connection.invoke('ViewerReady', collaborationId))
+                        .catch(e => console.error('ViewerReady invoke failed after ScreenShareStarted', e));
+                } catch (e) {
+                    console.error('ScreenShareStarted viewer hook failed', e);
+                }
             });
 
             connection.on("ScreenShareStopped", () => {
@@ -627,6 +745,23 @@
                 await handleWebRTCIceCandidate(candidate);
             });
 
+            connection.on("ViewerReady", async (data) => {
+                try {
+                    if (!localStream) return;
+                    if (!currentSession?.CollaborationId) return;
+                    if (!connection) return;
+
+                    const collaborationId = data?.collaborationId || data?.CollaborationId || currentSession.CollaborationId;
+                    const viewerConnectionId = data?.viewerConnectionId || data?.ViewerConnectionId;
+                    if (!viewerConnectionId) return;
+
+                    await ensureConnected();
+                    await startWebRTCConnectionToViewer(collaborationId, viewerConnectionId);
+                } catch (e) {
+                    console.error('ViewerReady handler failed', e);
+                }
+            });
+
             connection.on("Error", (error) => {
                 alert('Error: ' + error);
             });
@@ -638,8 +773,17 @@
                     console.log('Connected to SignalR hub');
 
                     if (currentSession?.CollaborationId) {
-                        return connection.invoke('JoinCollaboration', currentSession.CollaborationId)
-                            .then(() => setChatEnabled(true))
+                        return joinCollaborationOnce(currentSession.CollaborationId)
+                            .then(async () => {
+                                setChatEnabled(true);
+                                try {
+                                    if (currentUser?.userType === 'agent' || currentUser?.userType === 'supervisor') {
+                                        await connection.invoke('ViewerReady', currentSession.CollaborationId);
+                                    }
+                                } catch (e) {
+                                    console.error('ViewerReady invoke failed after initial auto-join', e);
+                                }
+                            })
                             .catch(err => {
                                 console.error('Auto-join collaboration failed', err);
                                 try {
@@ -729,7 +873,10 @@
 
         // Create new session
         async function createNewSession() {
+            const previousCollaborationId = currentSession?.CollaborationId;
             try {
+                await leaveCollaborationIfJoined(previousCollaborationId);
+                cleanupWebRTC();
                 setChatEnabled(false);
                 const response = await fetch(`${API_BASE_URL}/collaboration/session/create`, {
                     method: 'POST',
@@ -761,8 +908,7 @@
                     }
                     
                     // Join SignalR group
-                    await ensureConnected();
-                    await connection.invoke("JoinCollaboration", (collaborationId || '').toString().trim());
+                    await joinCollaborationOnce(collaborationId);
                     setChatEnabled(true);
                     
                     // Clear chat and load session info
@@ -808,14 +954,16 @@
                     }
                     const userId = s?.userId ?? s?.UserId;
                     const agentId = s?.agentId ?? s?.AgentId;
+                    const userName = s?.userName || s?.UserName || '';
+                    const agentName = s?.agentName || s?.AgentName || '';
                     const div = document.createElement('div');
                     div.className = 'flex justify-between items-center p-2 bg-gray-50 rounded';
                     const startedAt = s?.startedAt || s?.StartedAt;
                     const started = startedAt ? new Date(startedAt).toLocaleTimeString() : '';
                     div.innerHTML = `
                         <div class="text-sm">
-                            <div class="font-medium">${collaborationId}</div>
-                            <div class="text-xs text-gray-500">Started: ${started} • User: ${userId ?? ''} • Agent: ${agentId ?? ''}</div>
+                            <div class="font-medium">${agentName || ('Agent ' + (agentId ?? ''))} • ${userName || ('User ' + (userId ?? ''))}</div>
+                            <div class="text-xs text-gray-500">Started: ${started} • Session: ${collaborationId}</div>
                         </div>
                         <button class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600">Join</button>
                     `;
@@ -838,10 +986,18 @@
                 localStorage.setItem('currentSession', JSON.stringify(currentSession));
                 document.getElementById('collaborationId').textContent = collaborationId;
                 console.log('Joining session', collaborationId);
-                await connection.invoke('JoinCollaboration', collaborationId);
+                await joinCollaborationOnce(collaborationId);
                 setChatEnabled(true);
                 clearChat();
                 loadSessionInfo();
+
+                try {
+                    if (currentUser?.userType === 'supervisor' || currentUser?.userType === 'agent') {
+                        await connection.invoke('ViewerReady', collaborationId);
+                    }
+                } catch (e) {
+                    console.error('ViewerReady invoke failed', e);
+                }
             } catch (e) {
                 alert('Failed to join session: ' + (e.message || e));
             }
@@ -1077,6 +1233,9 @@
                 const [remoteStream] = event.streams;
                 const video = document.getElementById('videoPlayer');
                 if (video) {
+                    video.autoplay = true;
+                    video.playsInline = true;
+                    video.muted = true;
                     video.srcObject = remoteStream;
                     video.style.display = 'block';
                     const playPromise = video.play();
@@ -1090,8 +1249,14 @@
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate && connection && currentSession?.CollaborationId) {
-                    connection.invoke("SendWebRTCIceCandidate", currentSession.CollaborationId, event.candidate)
-                        .catch(err => console.error('Failed to send ICE candidate', err));
+                    const target = remotePublisherConnectionId;
+                    if (target) {
+                        connection.invoke("SendWebRTCIceCandidateTo", currentSession.CollaborationId, target, event.candidate)
+                            .catch(err => console.error('Failed to send ICE candidate', err));
+                    } else {
+                        connection.invoke("SendWebRTCIceCandidate", currentSession.CollaborationId, event.candidate)
+                            .catch(err => console.error('Failed to send ICE candidate', err));
+                    }
                 }
             };
 
@@ -1115,6 +1280,58 @@
             await pc.setLocalDescription(offer);
 
             await connection.invoke("SendWebRTCOffer", currentSession.CollaborationId, offer);
+        }
+
+        function createPeerConnectionForViewer(viewerConnectionId) {
+            const forceRelay = new URLSearchParams(window.location.search).get('forceRelay') === '1';
+
+            const configuration = {
+                iceTransportPolicy: forceRelay ? 'relay' : 'all',
+                iceServers: [
+                    { urls: 'stun:57.151.97.238:3478' },
+                    {
+                        urls: [
+                            'turn:57.151.97.238:3478?transport=udp',
+                            'turn:57.151.97.238:3478?transport=tcp'
+                        ],
+                        username: 'readi',
+                        credential: 'NASS9411!!!'
+                    }
+                ]
+            };
+
+            const pc = new RTCPeerConnection(configuration);
+            pc.onicecandidate = (event) => {
+                if (event.candidate && connection && currentSession?.CollaborationId) {
+                    connection.invoke("SendWebRTCIceCandidateTo", currentSession.CollaborationId, viewerConnectionId, event.candidate)
+                        .catch(err => console.error('Failed to send ICE candidate', err));
+                }
+            };
+
+            return pc;
+        }
+
+        async function startWebRTCConnectionToViewer(collaborationId, viewerConnectionId) {
+            if (!localStream) {
+                throw new Error('No local stream available for screen sharing');
+            }
+
+            const existing = publisherPeerConnections[viewerConnectionId];
+            if (existing) {
+                try { existing.close(); } catch { }
+            }
+
+            const pc = createPeerConnectionForViewer(viewerConnectionId);
+            publisherPeerConnections[viewerConnectionId] = pc;
+
+            localStream.getTracks().forEach(track => {
+                pc.addTrack(track, localStream);
+            });
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            await connection.invoke("SendWebRTCOfferTo", collaborationId, viewerConnectionId, offer);
         }
 
         // Recording functions
@@ -1260,7 +1477,8 @@
                 <div class="border rounded p-2 hover:bg-gray-50">
                     <div class="flex justify-between items-start mb-1">
                         <div class="flex-1">
-                            <p class="text-sm font-medium truncate">${rec.fileName}</p>
+                            <p class="text-sm font-medium truncate">${(rec.agentName || rec.AgentName || 'Agent')} • ${(rec.userName || rec.UserName || 'User')}</p>
+                            <p class="text-xs text-gray-600 truncate">${rec.fileName}</p>
                             <p class="text-xs text-gray-500">${formatFileSize(rec.size)} • ${formatDate(rec.created)}</p>
                         </div>
                         <div class="flex space-x-1 ml-2">
@@ -1324,11 +1542,24 @@
         // WebRTC signaling handlers
         async function handleWebRTCOffer(offer) {
             try {
+                const offerObj = offer?.Offer || offer?.offer || offer;
+                const fromConnectionId = offer?.FromConnectionId || offer?.fromConnectionId || null;
+                if (fromConnectionId) {
+                    remotePublisherConnectionId = fromConnectionId;
+                }
+                if (peerConnection) {
+                    try { peerConnection.close(); } catch { }
+                    peerConnection = null;
+                }
                 const pc = ensurePeerConnection();
-                await pc.setRemoteDescription(new RTCSessionDescription(offer));
+                await pc.setRemoteDescription(new RTCSessionDescription(offerObj));
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
-                await connection.invoke("SendWebRTCAnswer", currentSession.CollaborationId, answer);
+                if (remotePublisherConnectionId) {
+                    await connection.invoke("SendWebRTCAnswerTo", currentSession.CollaborationId, remotePublisherConnectionId, answer);
+                } else {
+                    await connection.invoke("SendWebRTCAnswer", currentSession.CollaborationId, answer);
+                }
             } catch (error) {
                 console.error('Error handling WebRTC offer:', error);
             }
@@ -1336,10 +1567,18 @@
 
         async function handleWebRTCAnswer(answer) {
             try {
+                const answerObj = answer?.Answer || answer?.answer || answer;
+                const fromConnectionId = answer?.FromConnectionId || answer?.fromConnectionId || null;
+
+                if (fromConnectionId && publisherPeerConnections[fromConnectionId]) {
+                    await publisherPeerConnections[fromConnectionId].setRemoteDescription(new RTCSessionDescription(answerObj));
+                    return;
+                }
+
                 if (!peerConnection) {
                     ensurePeerConnection();
                 }
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answerObj));
             } catch (error) {
                 console.error('Error handling WebRTC answer:', error);
             }
@@ -1347,10 +1586,18 @@
 
         async function handleWebRTCIceCandidate(candidate) {
             try {
+                const candidateObj = candidate?.Candidate || candidate?.candidate || candidate;
+                const fromConnectionId = candidate?.FromConnectionId || candidate?.fromConnectionId || null;
+
+                if (fromConnectionId && publisherPeerConnections[fromConnectionId]) {
+                    await publisherPeerConnections[fromConnectionId].addIceCandidate(new RTCIceCandidate(candidateObj));
+                    return;
+                }
+
                 if (!peerConnection) {
                     ensurePeerConnection();
                 }
-                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidateObj));
             } catch (error) {
                 console.error('Error handling ICE candidate:', error);
             }
@@ -1511,10 +1758,51 @@
             const video = document.getElementById('videoPlayer');
             const placeholder = document.getElementById('videoPlaceholder');
             
-            video.pause();
+            try {
+                video.pause();
+            } catch { }
+            video.srcObject = null;
             video.src = '';
             video.style.display = 'none';
             placeholder.style.display = 'flex';
+        }
+
+        function cleanupWebRTC() {
+            stopViewingStream();
+
+            remotePublisherConnectionId = null;
+
+            if (peerConnection) {
+                try { peerConnection.close(); } catch { }
+                peerConnection = null;
+            }
+
+            if (publisherPeerConnections) {
+                for (const key of Object.keys(publisherPeerConnections)) {
+                    try { publisherPeerConnections[key]?.close(); } catch { }
+                }
+            }
+            publisherPeerConnections = {};
+        }
+
+        async function resumeViewingStream() {
+            try {
+                if (!(currentUser?.userType === 'agent' || currentUser?.userType === 'supervisor')) {
+                    return;
+                }
+                const collaborationId = currentSession?.CollaborationId;
+                if (!collaborationId) {
+                    alert('No active session to resume');
+                    return;
+                }
+
+                cleanupWebRTC();
+                await joinCollaborationOnce(collaborationId);
+                await connection.invoke('ViewerReady', collaborationId);
+            } catch (e) {
+                console.error('Resume stream failed', e);
+                alert('Failed to resume stream');
+            }
         }
 
         // End session
@@ -1528,14 +1816,16 @@
                         headers: { 'Content-Type': 'application/json' }
                     });
 
-                    if (connection) {
-                        await connection.invoke("LeaveCollaboration", currentSession.CollaborationId);
-                    }
+                    await leaveCollaborationIfJoined(currentSession.CollaborationId);
+
+                    cleanupWebRTC();
 
                     currentSession = null;
+                    try { localStorage.removeItem('currentSession'); } catch { }
                     document.getElementById('collaborationId').textContent = '';
                     clearChat();
                     document.getElementById('sessionInfo').innerHTML = '';
+                    setChatEnabled(false);
                 } catch (error) {
                     alert('Failed to end session: ' + error.message);
                 }
@@ -1544,11 +1834,16 @@
 
         // Logout
         function logout() {
+            cleanupWebRTC();
+
             if (connection) {
-                connection.stop();
+                try { connection.stop(); } catch { }
             }
+
+            joinedCollaborationId = null;
             
             localStorage.removeItem('currentUser');
+            localStorage.removeItem('currentSession');
             currentUser = null;
             currentSession = null;
             

@@ -19,6 +19,8 @@ public class CollaborationHub : Hub
     private static readonly Dictionary<string, string> _connectionUserIds = new();
     private static readonly Dictionary<int, HashSet<string>> _agentConnections = new();
     private static readonly object _agentConnectionsLock = new();
+    private static readonly Dictionary<int, HashSet<string>> _supervisorConnections = new();
+    private static readonly object _supervisorConnectionsLock = new();
 
     public CollaborationHub(
         ILocalDataService dataService,
@@ -87,6 +89,20 @@ public class CollaborationHub : Hub
                     _logger.LogWarning(ex, "Failed to auto-join assigned session for agent on connect. AgentId={AgentId}", agentId);
                 }
             }
+
+            if (userType == "Supervisor" && int.TryParse(userId, out var supervisorId))
+            {
+                lock (_supervisorConnectionsLock)
+                {
+                    if (!_supervisorConnections.TryGetValue(supervisorId, out var connections))
+                    {
+                        connections = new HashSet<string>();
+                        _supervisorConnections[supervisorId] = connections;
+                    }
+
+                    connections.Add(Context.ConnectionId);
+                }
+            }
         }
 
         await base.OnConnectedAsync();
@@ -111,6 +127,21 @@ public class CollaborationHub : Hub
                         if (conns.Count == 0)
                         {
                             _agentConnections.Remove(disconnectAgentId);
+                        }
+                    }
+                }
+            }
+
+            if (userType == "Supervisor" && int.TryParse(userId, out var disconnectSupervisorId))
+            {
+                lock (_supervisorConnectionsLock)
+                {
+                    if (_supervisorConnections.TryGetValue(disconnectSupervisorId, out var conns))
+                    {
+                        conns.Remove(connectionId);
+                        if (conns.Count == 0)
+                        {
+                            _supervisorConnections.Remove(disconnectSupervisorId);
                         }
                     }
                 }
@@ -160,6 +191,38 @@ public class CollaborationHub : Hub
             {
                 CollaborationId = collaborationId,
                 AgentId = agentId
+            });
+        }
+    }
+
+    private async Task AddSupervisorToCollaborationGroupIfConnectedAsync(int supervisorId, string collaborationId)
+    {
+        List<string> supervisorConnectionIds;
+        lock (_supervisorConnectionsLock)
+        {
+            supervisorConnectionIds = _supervisorConnections.TryGetValue(supervisorId, out var conns)
+                ? conns.ToList()
+                : new List<string>();
+        }
+
+        foreach (var connId in supervisorConnectionIds)
+        {
+            try
+            {
+                await Groups.AddToGroupAsync(connId, collaborationId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to add supervisor connection to group. SupervisorId={SupervisorId}, ConnectionId={ConnectionId}, CollaborationId={CollaborationId}", supervisorId, connId, collaborationId);
+            }
+        }
+
+        if (supervisorConnectionIds.Count > 0)
+        {
+            await Clients.Clients(supervisorConnectionIds).SendAsync("AssignedToSession", new
+            {
+                CollaborationId = collaborationId,
+                SupervisorId = supervisorId
             });
         }
     }
@@ -363,6 +426,9 @@ public class CollaborationHub : Hub
         if (assigned)
         {
             var supervisor = await _dataService.GetSupervisorAsync(supervisorId);
+
+            await AddSupervisorToCollaborationGroupIfConnectedAsync(supervisorId, collaborationId);
+
             await Clients.Group(collaborationId).SendAsync("SupervisorAdded", new
             {
                 SupervisorId = supervisorId,
@@ -401,7 +467,26 @@ public class CollaborationHub : Hub
             return;
         }
 
-        await Clients.OthersInGroup(collaborationId).SendAsync("ReceiveWebRTCOffer", offer);
+        await Clients.OthersInGroup(collaborationId).SendAsync("ReceiveWebRTCOffer", new
+        {
+            Offer = offer,
+            FromConnectionId = Context.ConnectionId
+        });
+    }
+
+    public async Task SendWebRTCOfferTo(string collaborationId, string targetConnectionId, object offer)
+    {
+        if (string.IsNullOrWhiteSpace(collaborationId) || string.IsNullOrWhiteSpace(targetConnectionId))
+        {
+            await Clients.Caller.SendAsync("Error", "Invalid collaboration id or target connection id");
+            return;
+        }
+
+        await Clients.Client(targetConnectionId).SendAsync("ReceiveWebRTCOffer", new
+        {
+            Offer = offer,
+            FromConnectionId = Context.ConnectionId
+        });
     }
 
     public async Task SendWebRTCAnswer(string collaborationId, object answer)
@@ -412,7 +497,26 @@ public class CollaborationHub : Hub
             return;
         }
 
-        await Clients.OthersInGroup(collaborationId).SendAsync("ReceiveWebRTCAnswer", answer);
+        await Clients.OthersInGroup(collaborationId).SendAsync("ReceiveWebRTCAnswer", new
+        {
+            Answer = answer,
+            FromConnectionId = Context.ConnectionId
+        });
+    }
+
+    public async Task SendWebRTCAnswerTo(string collaborationId, string targetConnectionId, object answer)
+    {
+        if (string.IsNullOrWhiteSpace(collaborationId) || string.IsNullOrWhiteSpace(targetConnectionId))
+        {
+            await Clients.Caller.SendAsync("Error", "Invalid collaboration id or target connection id");
+            return;
+        }
+
+        await Clients.Client(targetConnectionId).SendAsync("ReceiveWebRTCAnswer", new
+        {
+            Answer = answer,
+            FromConnectionId = Context.ConnectionId
+        });
     }
 
     public async Task SendWebRTCIceCandidate(string collaborationId, object candidate)
@@ -423,7 +527,41 @@ public class CollaborationHub : Hub
             return;
         }
 
-        await Clients.OthersInGroup(collaborationId).SendAsync("ReceiveWebRTCIceCandidate", candidate);
+        await Clients.OthersInGroup(collaborationId).SendAsync("ReceiveWebRTCIceCandidate", new
+        {
+            Candidate = candidate,
+            FromConnectionId = Context.ConnectionId
+        });
+    }
+
+    public async Task SendWebRTCIceCandidateTo(string collaborationId, string targetConnectionId, object candidate)
+    {
+        if (string.IsNullOrWhiteSpace(collaborationId) || string.IsNullOrWhiteSpace(targetConnectionId))
+        {
+            await Clients.Caller.SendAsync("Error", "Invalid collaboration id or target connection id");
+            return;
+        }
+
+        await Clients.Client(targetConnectionId).SendAsync("ReceiveWebRTCIceCandidate", new
+        {
+            Candidate = candidate,
+            FromConnectionId = Context.ConnectionId
+        });
+    }
+
+    public async Task ViewerReady(string collaborationId)
+    {
+        if (string.IsNullOrWhiteSpace(collaborationId))
+        {
+            await Clients.Caller.SendAsync("Error", "Invalid collaboration id");
+            return;
+        }
+
+        await Clients.OthersInGroup(collaborationId).SendAsync("ViewerReady", new
+        {
+            CollaborationId = collaborationId,
+            ViewerConnectionId = Context.ConnectionId
+        });
     }
 
     public async Task SetTyping(string collaborationId, bool isTyping)
