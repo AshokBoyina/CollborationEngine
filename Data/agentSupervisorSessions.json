@@ -1,3 +1,14 @@
 [
-  
+  {
+    "Id": 1,
+    "JoinedAt": "2026-04-15T16:52:33.8641027Z",
+    "LeftAt": null,
+    "IsActive": true,
+    "CollaborationSessionId": 15,
+    "AgentId": 1,
+    "SupervisorId": 1,
+    "CollaborationSession": null,
+    "Agent": null,
+    "Supervisor": null
+  }
 ]

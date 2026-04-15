@@ -109,7 +109,7 @@
                         <h2 class="text-xl font-bold">Collaboration Session</h2>
                         <p class="text-sm text-gray-600" id="collaborationIdRow">ID: <span id="collaborationId"></span></p>
                         <p class="text-sm text-gray-600">Role: <span id="userRole"></span></p>
-                        <p class="text-sm text-gray-600" id="userIdentityRow">You: <span id="userIdentity"></span></p>
+                        <p class="text-sm text-gray-600" id="userIdentityRow"><span id="userIdentityLabel">You</span>: <span id="userIdentity"></span></p>
                     </div>
                     <div class="flex space-x-2">
                         <button id="newSessionBtn" onclick="createNewSession()" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
@@ -282,10 +282,43 @@
         const API_BASE_URL = window.location.origin + '/api';
         const HUB_URL = window.location.origin + '/collaborationHub';
 
+        const roleParam = (new URLSearchParams(window.location.search).get('role') || '').toLowerCase();
+        const forcedRoleFromUrl = (roleParam === 'user' || roleParam === 'agent' || roleParam === 'supervisor') ? roleParam : '';
+
+        const appParam = (new URLSearchParams(window.location.search).get('app') || '').toString().trim();
+
+        function getSelectedApplicationName() {
+            const fromUrl = (new URLSearchParams(window.location.search).get('app') || '').toString().trim();
+            if (fromUrl) return fromUrl;
+            try {
+                const saved = localStorage.getItem('currentAppName');
+                if (saved) return saved.toString().trim();
+            } catch { }
+            return '';
+        }
+
+        function persistSelectedApplicationName() {
+            const name = getSelectedApplicationName();
+            try {
+                if (name) localStorage.setItem('currentAppName', name);
+                else localStorage.removeItem('currentAppName');
+            } catch { }
+            return name;
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
+            persistSelectedApplicationName();
             checkExistingSession();
-            switchUserType('user');
+            if (forcedRoleFromUrl) {
+                const tabs = document.getElementById('userTypeTabs');
+                if (tabs) {
+                    tabs.style.display = 'none';
+                }
+                switchUserType(forcedRoleFromUrl);
+            } else {
+                switchUserType('user');
+            }
         });
 
         window.addEventListener('beforeunload', function() {
@@ -327,6 +360,7 @@
             const email = document.getElementById('email').value;
             const name = document.getElementById('name') ? document.getElementById('name').value : '';
             const phoneNumber = document.getElementById('phoneNumber') ? document.getElementById('phoneNumber').value : '';
+            const applicationName = persistSelectedApplicationName();
 
             try {
                 if (userType === 'user') {
@@ -335,7 +369,7 @@
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ name, email, phoneNumber })
+                        body: JSON.stringify({ name, email, phoneNumber, applicationName: applicationName || null })
                     });
 
                     if (!regResponse.ok) {
@@ -347,10 +381,10 @@
                     const user = await regResponse.json();
                     currentUser = {
                         userType: 'user',
-                        id: user.Id,
-                        name: user.Name,
-                        email: user.Email,
-                        phoneNumber: user.PhoneNumber,
+                        id: user?.Id ?? user?.id,
+                        name: user?.Name ?? user?.name,
+                        email: user?.Email ?? user?.email,
+                        phoneNumber: user?.PhoneNumber ?? user?.phoneNumber,
                         token: ''
                     };
 
@@ -365,7 +399,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ email, apiKey: '' })
+                    body: JSON.stringify({ email, apiKey: '', applicationName: applicationName || null })
                 });
 
                 if (response.ok) {
@@ -397,7 +431,33 @@
         function checkExistingSession() {
             const savedUser = localStorage.getItem('currentUser');
             if (savedUser) {
-                currentUser = JSON.parse(savedUser);
+                try {
+                    currentUser = JSON.parse(savedUser);
+                } catch {
+                    currentUser = null;
+                }
+
+                if (forcedRoleFromUrl) {
+                    const savedRole = (currentUser?.userType || '').toString().toLowerCase();
+
+                    if (forcedRoleFromUrl === 'user') {
+                        // Always force user to enter details again
+                        localStorage.removeItem('currentUser');
+                        localStorage.removeItem('currentSession');
+                        currentUser = null;
+                        currentSession = null;
+                        return;
+                    }
+
+                    // For agent/supervisor: prevent cross-role reuse of localStorage
+                    if (savedRole !== forcedRoleFromUrl) {
+                        localStorage.removeItem('currentUser');
+                        localStorage.removeItem('currentSession');
+                        currentUser = null;
+                        currentSession = null;
+                        return;
+                    }
+                }
 
                 const savedSession = localStorage.getItem('currentSession');
                 if (savedSession) {
@@ -441,6 +501,12 @@
                 userIdentity.textContent = identity.trim();
             }
 
+            const userIdentityLabel = document.getElementById('userIdentityLabel');
+            if (userIdentityLabel) {
+                const role = (currentUser?.userType || '').toString().trim();
+                userIdentityLabel.textContent = role ? (role.charAt(0).toUpperCase() + role.slice(1)) : 'You';
+            }
+
             setChatEnabled(!!(currentSession && currentSession.CollaborationId));
 
             const isUser = currentUser.userType === 'user';
@@ -456,8 +522,8 @@
             const activeSessionsSection = document.getElementById('activeSessionsSection');
 
             if (collaborationIdRow) collaborationIdRow.style.display = 'block';
-            if (newSessionBtn) newSessionBtn.style.display = isUser ? 'none' : 'inline-flex';
-            if (endSessionBtn) endSessionBtn.style.display = isUser ? 'none' : 'inline-flex';
+            if (newSessionBtn) newSessionBtn.style.display = 'none';
+            if (endSessionBtn) endSessionBtn.style.display = isAgent ? 'inline-flex' : 'none';
             if (logoutBtn) logoutBtn.style.display = isUser ? 'none' : 'inline-flex';
             if (stopShareBtn) stopShareBtn.style.display = isUser ? 'inline-flex' : 'none';
             if (requestAgentBtn) requestAgentBtn.style.display = isUser ? 'inline-flex' : 'none';
@@ -878,12 +944,13 @@
                 await leaveCollaborationIfJoined(previousCollaborationId);
                 cleanupWebRTC();
                 setChatEnabled(false);
+                const applicationName = getSelectedApplicationName();
                 const response = await fetch(`${API_BASE_URL}/collaboration/session/create`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ userId: currentUser?.id || 1, applicationId: 1 })
+                    body: JSON.stringify({ userId: currentUser?.id || 1, applicationName: applicationName || null })
                 });
 
                 if (response.ok) {
@@ -891,11 +958,15 @@
                     const collaborationId = data?.collaborationId || data?.CollaborationId;
                     const sessionId = data?.sessionId || data?.SessionId;
                     const startedAt = data?.startedAt || data?.StartedAt;
+                    const appId = data?.applicationId || data?.ApplicationId;
+                    const appName = data?.applicationName || data?.ApplicationName;
 
                     currentSession = {
                         CollaborationId: collaborationId,
                         SessionId: sessionId,
-                        StartedAt: startedAt
+                        StartedAt: startedAt,
+                        ApplicationId: appId,
+                        ApplicationName: appName
                     };
                     localStorage.setItem('currentSession', JSON.stringify(currentSession));
                     document.getElementById('collaborationId').textContent = collaborationId || '';
@@ -927,7 +998,11 @@
             if (!currentUser || currentUser.userType !== 'supervisor') return;
 
             try {
-                const response = await fetch(`${API_BASE_URL}/collaboration/sessions/active`);
+                const appName = getSelectedApplicationName();
+                const url = appName
+                    ? `${API_BASE_URL}/collaboration/sessions/active?appName=${encodeURIComponent(appName)}`
+                    : `${API_BASE_URL}/collaboration/sessions/active`;
+                const response = await fetch(url);
                 if (!response.ok) {
                     const error = await response.text();
                     console.error('Failed to load active sessions:', error);
@@ -956,6 +1031,7 @@
                     const agentId = s?.agentId ?? s?.AgentId;
                     const userName = s?.userName || s?.UserName || '';
                     const agentName = s?.agentName || s?.AgentName || '';
+                    const applicationName = s?.applicationName || s?.ApplicationName || '';
                     const div = document.createElement('div');
                     div.className = 'flex justify-between items-center p-2 bg-gray-50 rounded';
                     const startedAt = s?.startedAt || s?.StartedAt;
@@ -963,7 +1039,7 @@
                     div.innerHTML = `
                         <div class="text-sm">
                             <div class="font-medium">${agentName || ('Agent ' + (agentId ?? ''))} • ${userName || ('User ' + (userId ?? ''))}</div>
-                            <div class="text-xs text-gray-500">Started: ${started} • Session: ${collaborationId}</div>
+                            <div class="text-xs text-gray-500">${applicationName ? (applicationName + ' • ') : ''}Started: ${started} • Session: ${collaborationId}</div>
                         </div>
                         <button class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600">Join</button>
                     `;
@@ -1606,11 +1682,18 @@
         // Load available staff
         async function loadAvailableStaff() {
             try {
+                const appName = getSelectedApplicationName();
+                const agentsUrl = appName
+                    ? `${API_BASE_URL}/management/agents/available?appName=${encodeURIComponent(appName)}`
+                    : `${API_BASE_URL}/management/agents/available`;
+                const supervisorsUrl = appName
+                    ? `${API_BASE_URL}/management/supervisors/available?appName=${encodeURIComponent(appName)}`
+                    : `${API_BASE_URL}/management/supervisors/available`;
                 const [agentsResponse, supervisorsResponse] = await Promise.all([
-                    fetch(`${API_BASE_URL}/management/agents/available`, {
+                    fetch(agentsUrl, {
                         headers: { 'Content-Type': 'application/json' }
                     }),
-                    fetch(`${API_BASE_URL}/management/supervisors/available`, {
+                    fetch(supervisorsUrl, {
                         headers: { 'Content-Type': 'application/json' }
                     })
                 ]);
@@ -1809,6 +1892,21 @@
         async function endSession() {
             if (!currentSession) return;
 
+            if (currentUser?.userType === 'supervisor') {
+                try {
+                    await leaveCollaborationIfJoined(currentSession.CollaborationId);
+                } catch { }
+
+                cleanupWebRTC();
+                currentSession = null;
+                try { localStorage.removeItem('currentSession'); } catch { }
+                document.getElementById('collaborationId').textContent = '';
+                clearChat();
+                document.getElementById('sessionInfo').innerHTML = '';
+                setChatEnabled(false);
+                return;
+            }
+
             if (confirm('Are you sure you want to end this session?')) {
                 try {
                     await fetch(`${API_BASE_URL}/collaboration/session/${currentSession.CollaborationId}/end`, {
@@ -1834,6 +1932,9 @@
 
         // Logout
         function logout() {
+            const roleToReturn = (forcedRoleFromUrl || currentUser?.userType || '').toString().toLowerCase();
+            const appName = getSelectedApplicationName();
+
             cleanupWebRTC();
 
             if (connection) {
@@ -1852,7 +1953,28 @@
             
             // Reset form
             document.getElementById('loginForm').reset();
-            switchUserType('user');
+
+            if (forcedRoleFromUrl) {
+                const tabs = document.getElementById('userTypeTabs');
+                if (tabs) {
+                    tabs.style.display = 'none';
+                }
+            } else {
+                const tabs = document.getElementById('userTypeTabs');
+                if (tabs) {
+                    tabs.style.display = 'flex';
+                }
+            }
+
+            const role = (roleToReturn === 'agent' || roleToReturn === 'supervisor' || roleToReturn === 'user') ? roleToReturn : 'user';
+            switchUserType(role);
+
+            if (forcedRoleFromUrl || appName) {
+                const params = new URLSearchParams();
+                if (role) params.set('role', role);
+                if (appName) params.set('app', appName);
+                window.location.href = `${window.location.origin}/index.html?${params.toString()}`;
+            }
         }
     </script>
 </body>

@@ -44,6 +44,19 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
+
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.Equals("/index.html/", StringComparison.OrdinalIgnoreCase))
+    {
+        var qs = context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty;
+        context.Response.Redirect("/index.html" + qs, permanent: false);
+        return;
+    }
+
+    await next();
+});
+
 app.UseStaticFiles();
 
 app.MapControllers();

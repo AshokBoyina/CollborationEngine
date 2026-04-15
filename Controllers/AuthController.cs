@@ -25,7 +25,7 @@ public class AuthController : ControllerBase
     [HttpPost("login/agent")]
     public async Task<IActionResult> LoginAgent([FromBody] AgentLoginRequest request)
     {
-        var applicationId = 1;
+        var applicationId = await ResolveApplicationIdAsync(request.ApiKey, request.ApplicationName);
         var agents = await _dataService.GetAgentsAsync();
         var existing = agents.FirstOrDefault(a => string.Equals(a.Email, request.Email, StringComparison.OrdinalIgnoreCase) && a.ApplicationId == applicationId);
 
@@ -57,7 +57,7 @@ public class AuthController : ControllerBase
     [HttpPost("login/supervisor")]
     public async Task<IActionResult> LoginSupervisor([FromBody] SupervisorLoginRequest request)
     {
-        var applicationId = 1;
+        var applicationId = await ResolveApplicationIdAsync(request.ApiKey, request.ApplicationName);
         var supervisors = await _dataService.GetSupervisorsAsync();
         var existing = supervisors.FirstOrDefault(s => string.Equals(s.Email, request.Email, StringComparison.OrdinalIgnoreCase) && s.ApplicationId == applicationId);
 
@@ -96,8 +96,34 @@ public class AuthController : ControllerBase
         }
         return Ok(new { UserId = userId, UserType = userType });
     }
+
+    private async Task<int> ResolveApplicationIdAsync(string? apiKey, string? applicationName)
+    {
+        var apps = await _dataService.GetApplicationsAsync();
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            var byKey = apps.FirstOrDefault(a => string.Equals(a.ApiKey, apiKey.Trim(), StringComparison.Ordinal));
+            if (byKey != null)
+            {
+                return byKey.Id;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(applicationName))
+        {
+            var normalized = applicationName.Trim();
+            var byName = apps.FirstOrDefault(a => string.Equals(a.Name?.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+            if (byName != null)
+            {
+                return byName.Id;
+            }
+        }
+
+        return 1;
+    }
 }
 
-public record UserLoginRequest(string Email, string ApiKey);
-public record AgentLoginRequest(string Email, string ApiKey);
-public record SupervisorLoginRequest(string Email, string ApiKey);
+public record UserLoginRequest(string Email, string ApiKey, string? ApplicationName = null);
+public record AgentLoginRequest(string Email, string ApiKey, string? ApplicationName = null);
+public record SupervisorLoginRequest(string Email, string ApiKey, string? ApplicationName = null);

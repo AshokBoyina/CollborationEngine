@@ -52,10 +52,28 @@ public class ManagementController : ControllerBase
         });
     }
 
+    [HttpGet("applications")]
+    public async Task<IActionResult> GetApplications()
+    {
+        var apps = await _dataService.GetApplicationsAsync();
+        var active = apps
+            .Where(a => a.IsActive)
+            .OrderBy(a => a.Name)
+            .Select(a => new
+            {
+                a.Id,
+                a.Name,
+                a.Description
+            })
+            .ToList();
+
+        return Ok(active);
+    }
+
     [HttpPost("user/register")]
     public async Task<IActionResult> RegisterUser([FromBody] RegisterUserRequest request)
     {
-        var application = await GetOrCreateDefaultApplicationAsync();
+        var application = await ResolveApplicationAsync(request.ApiKey, request.ApplicationName);
 
         var users = await _dataService.GetUsersAsync();
         var existingUser = users.FirstOrDefault(u => u.Email == request.Email && u.ApplicationId == application.Id);
@@ -89,7 +107,7 @@ public class ManagementController : ControllerBase
     [HttpPost("user/register/simple")]
     public async Task<IActionResult> RegisterUserSimple([FromBody] RegisterUserSimpleRequest request)
     {
-        var application = await GetOrCreateDefaultApplicationAsync();
+        var application = await ResolveApplicationAsync(null, request.ApplicationName);
 
         var users = await _dataService.GetUsersAsync();
         var existingUser = users.FirstOrDefault(u => u.Email == request.Email && u.ApplicationId == application.Id);
@@ -128,7 +146,7 @@ public class ManagementController : ControllerBase
     [HttpPost("agent/register")]
     public async Task<IActionResult> RegisterAgent([FromBody] RegisterAgentRequest request)
     {
-        var application = await GetOrCreateDefaultApplicationAsync();
+        var application = await ResolveApplicationAsync(request.ApiKey, request.ApplicationName);
 
         var agents = await _dataService.GetAgentsAsync();
         var existingAgent = agents.FirstOrDefault(a => a.Email == request.Email && a.ApplicationId == application.Id);
@@ -165,7 +183,7 @@ public class ManagementController : ControllerBase
     [HttpPost("supervisor/register")]
     public async Task<IActionResult> RegisterSupervisor([FromBody] RegisterSupervisorRequest request)
     {
-        var application = await GetOrCreateDefaultApplicationAsync();
+        var application = await ResolveApplicationAsync(request.ApiKey, request.ApplicationName);
 
         var supervisors = await _dataService.GetSupervisorsAsync();
         var existingSupervisor = supervisors.FirstOrDefault(s => s.Email == request.Email && s.ApplicationId == application.Id);
@@ -200,10 +218,10 @@ public class ManagementController : ControllerBase
     }
 
     [HttpGet("agents/available")]
-    public async Task<IActionResult> GetAvailableAgents()
+    public async Task<IActionResult> GetAvailableAgents([FromQuery] string? appName = null, [FromQuery] string? apiKey = null)
     {
-        // For demo, return agents for application ID 1
-        var agents = await _agentAssignmentService.GetAvailableAgentsAsync(1);
+        var app = await ResolveApplicationAsync(apiKey, appName);
+        var agents = await _agentAssignmentService.GetAvailableAgentsAsync(app.Id);
         return Ok(agents.Select(a => new
         {
             a.Id,
@@ -215,10 +233,10 @@ public class ManagementController : ControllerBase
     }
 
     [HttpGet("supervisors/available")]
-    public async Task<IActionResult> GetAvailableSupervisors([FromQuery] int? currentAgentId = null)
+    public async Task<IActionResult> GetAvailableSupervisors([FromQuery] int? currentAgentId = null, [FromQuery] string? appName = null, [FromQuery] string? apiKey = null)
     {
-        // For demo, return supervisors for application ID 1
-        var supervisors = await _supervisorAssignmentService.GetAvailableSupervisorsAsync(1, currentAgentId);
+        var app = await ResolveApplicationAsync(apiKey, appName);
+        var supervisors = await _supervisorAssignmentService.GetAvailableSupervisorsAsync(app.Id, currentAgentId);
         return Ok(supervisors.Select(s => new
         {
             s.Id,
@@ -306,11 +324,49 @@ public class ManagementController : ControllerBase
 
         return await _dataService.SaveApplicationAsync(defaultApp);
     }
+
+    private async Task<Application> ResolveApplicationAsync(string? apiKey, string? applicationName)
+    {
+        var applications = await _dataService.GetApplicationsAsync();
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            var byKey = applications.FirstOrDefault(a => string.Equals(a.ApiKey, apiKey.Trim(), StringComparison.Ordinal));
+            if (byKey != null)
+            {
+                return byKey;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(applicationName))
+        {
+            var normalized = applicationName.Trim();
+            var byName = applications.FirstOrDefault(a => string.Equals(a.Name?.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+            if (byName != null)
+            {
+                return byName;
+            }
+
+            var created = new Application
+            {
+                Name = normalized,
+                Description = "Auto created application",
+                ApiKey = GenerateApiKey(),
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            return await _dataService.SaveApplicationAsync(created);
+        }
+
+        return await GetOrCreateDefaultApplicationAsync();
+    }
 }
 
 public record RegisterApplicationRequest(string Name, string Description);
-public record RegisterUserRequest(string Name, string Email, string PhoneNumber, string? AdditionalDetails, string? ApiKey);
-public record RegisterUserSimpleRequest(string Name, string Email, string PhoneNumber);
-public record RegisterAgentRequest(string Name, string Email, string PhoneNumber, string? Department, string? ApiKey);
-public record RegisterSupervisorRequest(string Name, string Email, string PhoneNumber, string? Department, string? ApiKey);
+public record RegisterUserRequest(string Name, string Email, string PhoneNumber, string? AdditionalDetails, string? ApiKey, string? ApplicationName);
+public record RegisterUserSimpleRequest(string Name, string Email, string PhoneNumber, string? ApplicationName);
+public record RegisterAgentRequest(string Name, string Email, string PhoneNumber, string? Department, string? ApiKey, string? ApplicationName);
+public record RegisterSupervisorRequest(string Name, string Email, string PhoneNumber, string? Department, string? ApiKey, string? ApplicationName);
 public record UpdateAvailabilityRequest(bool IsAvailable);
